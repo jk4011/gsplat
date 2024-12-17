@@ -15,6 +15,7 @@ from .normalize import (
     transform_cameras,
     transform_points,
 )
+from .diva360 import SceneManagerDiva360
 
 
 def _get_rel_paths(path_dir: str) -> List[str]:
@@ -35,24 +36,34 @@ class Parser:
         factor: int = 1,
         normalize: bool = False,
         test_every: int = 8,
+        no_colmap: bool = True,
     ):
         self.data_dir = data_dir
         self.factor = factor
         self.normalize = normalize
         self.test_every = test_every
 
-        colmap_dir = os.path.join(data_dir, "sparse/0/")
-        if not os.path.exists(colmap_dir):
-            colmap_dir = os.path.join(data_dir, "sparse")
-        assert os.path.exists(
-            colmap_dir
-        ), f"COLMAP directory {colmap_dir} does not exist."
+        if no_colmap:  # Diva360 data
+            json_path = os.path.join(data_dir, "transforms_train.json")
+            
+            manager = SceneManagerDiva360(json_path)
+            manager.load_cameras_from_json()
+            manager.load_extrinsics_from_json()
+            manager.genrate_random_points3D()
 
-        manager = SceneManager(colmap_dir)
-        manager.load_cameras()
-        manager.load_images()
-        manager.load_points3D()
+        else:
+            colmap_dir = os.path.join(data_dir, "sparse/0/")
+            if not os.path.exists(colmap_dir):
+                colmap_dir = os.path.join(data_dir, "sparse")
+            assert os.path.exists(
+                colmap_dir
+            ), f"COLMAP directory {colmap_dir} does not exist."
 
+            manager = SceneManager(colmap_dir)
+            manager.load_cameras()
+            manager.load_images()
+            manager.load_points3D()
+        
         # Extract extrinsic matrices in world-to-camera format.
         imdata = manager.images
         w2c_mats = []
