@@ -37,7 +37,6 @@ class SceneManagerDiva360:
         frames = data.get("frames", [])
 
         for camera_id, frame in enumerate(frames, 1):
-            file_path = frame.get("file_path", "")
             width = frame.get("w", 0)
             height = frame.get("h", 0)
             fl_x = frame.get("fl_x", 0.0)
@@ -88,7 +87,7 @@ class SceneManagerDiva360:
         self.bbox = np.array(
             [np.min(translation_list, axis=0), np.max(translation_list, axis=0)]
         )
-        self.points3D = np.random.uniform(-1000, 1000, (n, 3))
+        self.points3D = np.random.uniform(-3, 3, (n, 3))
         self.point3D_colors = np.ones((n, 3), dtype=np.uint8) * 255
         self.point3D_errors = np.random.rand(n)
         self.point3D_id_to_images = {}

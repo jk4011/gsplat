@@ -166,6 +166,8 @@ class Config:
     tb_every: int = 100
     # Save training images to tensorboard
     tb_save_image: bool = False
+    
+    no_colmap: bool = False
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -275,6 +277,7 @@ class Runner:
             factor=cfg.data_factor,
             normalize=True,
             test_every=cfg.test_every,
+            no_colmap=cfg.no_colmap,
         )
         self.trainset = Dataset(
             self.parser,
