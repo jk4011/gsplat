@@ -60,7 +60,6 @@ class SceneManagerDiva360:
         for camera_id, frame in enumerate(frames, 1):
             file_name = frame.get("file_path", "")
             file_name = file_name.replace("undist/", "")
-            file_name = file_name.replace("/", "_")
             transform = np.array(frame.get("transform_matrix", []))
 
             if transform.shape == (4, 4):
