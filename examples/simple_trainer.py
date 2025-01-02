@@ -165,6 +165,8 @@ class Config:
     lpips_net: Literal["vgg", "alex"] = "alex"
     
     no_colmap: bool = False
+    
+    single_finetune: bool = False
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -308,18 +310,21 @@ class Runner:
             test_every=cfg.test_every,
             no_colmap=cfg.no_colmap,
         )
+        from jhutil import color_log; color_log(1111, "init dataset")
         self.trainset = Dataset(
             self.parser,
             split="train",
             patch_size=cfg.patch_size,
             load_depths=cfg.depth_loss,
+            single_finetune=cfg.single_finetune,
         )
-        self.valset = Dataset(self.parser, split="val")
+        self.valset = Dataset(self.parser, split="val", single_finetune=cfg.single_finetune)
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         print("Scene scale:", self.scene_scale)
 
         # Model
         feature_dim = 32 if cfg.app_opt else None
+        from jhutil import color_log; color_log(2222, "init gaussian & optimizer")
         self.splats, self.optimizers = create_splats_with_optimizers(
             self.parser,
             init_type=cfg.init_type,
@@ -500,6 +505,7 @@ class Runner:
         return render_colors, render_alphas, info
 
     def train(self):
+        from jhutil import color_log; color_log(3333, "training starts")
         cfg = self.cfg
         device = self.device
         world_rank = self.world_rank
@@ -511,7 +517,10 @@ class Runner:
                 yaml.dump(vars(cfg), f)
 
         max_steps = cfg.max_steps
-        init_step = 0
+        if cfg.single_finetune:
+            init_step = 29000
+        else:
+            init_step = 0
 
         schedulers = [
             # means has a learning rate schedule, that end at 0.01 of the initial value
@@ -543,6 +552,7 @@ class Runner:
                 )
             )
 
+        from jhutil import color_log; color_log(4444, "init dataloader")
         trainloader = torch.utils.data.DataLoader(
             self.trainset,
             batch_size=cfg.batch_size,
@@ -593,6 +603,9 @@ class Runner:
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
             # forward
+            if step % 1000 == 0:
+                from jhutil import color_log; color_log(5555, "render gaussian")
+                from jhutil import color_log; color_log(5666, "camtoworlds:", camtoworlds)
             renders, alphas, info = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
@@ -631,6 +644,8 @@ class Runner:
                 info=info,
             )
 
+            if step % 1000 == 0:
+                from jhutil import color_log; color_log(6666, "calc loss")
             # loss
             l1loss = F.l1_loss(colors, pixels)
             ssimloss = 1.0 - fused_ssim(
@@ -668,11 +683,19 @@ class Runner:
                     * torch.abs(torch.sigmoid(self.splats["opacities"])).mean()
                 )
             if cfg.scale_reg > 0.0:
+                # loss = (
+                #     loss
+                #     + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
+                # )
+                
+                # Gaussian marble
                 loss = (
                     loss
-                    + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
+                    + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"].max(dim=-1)[0]) - torch.exp(self.splats["scales"].min(dim=-1)[0])).mean()
                 )
 
+            if step % 1000 == 0:
+                from jhutil import color_log; color_log(7777, "backprop")
             loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
@@ -764,6 +787,8 @@ class Runner:
                 else:
                     visibility_mask = (info["radii"] > 0).any(0)
 
+            if step % 1000 == 0:
+                from jhutil import color_log; color_log(8888, "optimize")
             # optimize
             for optimizer in self.optimizers.values():
                 if cfg.visible_adam:
@@ -1034,10 +1059,12 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         for k in runner.splats.keys():
             runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
         step = ckpts[0]["step"]
-        runner.eval(step=step)
-        runner.render_traj(step=step)
+        # runner.eval(step=step)
+        # runner.render_traj(step=step)
         if cfg.compression is not None:
             runner.run_compression(step=step)
+        if cfg.single_finetune:
+            runner.train()
     else:
         runner.train()
 

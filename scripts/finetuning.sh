@@ -16,7 +16,6 @@ CUDA_VISIBLE_DEVICES=0 python examples/simple_trainer.py default \
     --single_image \
     --port 8081 \
     --scale_reg 0.1 \
-    --max_steps 30500 \
 
 
     

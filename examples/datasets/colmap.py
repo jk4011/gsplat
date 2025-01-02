@@ -44,7 +44,7 @@ class Parser:
         self.test_every = test_every
 
         if no_colmap:  # Diva360 data
-            json_path = os.path.join(data_dir, "transforms_train.json")
+            json_path = os.path.join(data_dir, "cameras.json")
             
             manager = SceneManagerDiva360(json_path)
             manager.load_cameras_from_json()
@@ -319,16 +319,24 @@ class Dataset:
         split: str = "train",
         patch_size: Optional[int] = None,
         load_depths: bool = False,
+        single_finetune: bool = False,
     ):
         self.parser = parser
         self.split = split
         self.patch_size = patch_size
         self.load_depths = load_depths
         indices = np.arange(len(self.parser.image_names))
-        if split == "train":
-            self.indices = indices[indices % self.parser.test_every != 0]
+        
+        if single_finetune:
+            if split == "train":
+                self.indices = indices[indices == 0]
+            else:
+                self.indices = indices[indices != 0]
         else:
-            self.indices = indices[indices % self.parser.test_every == 0]
+            if split == "train":
+                self.indices = indices[indices % self.parser.test_every != 0]
+            else:
+                self.indices = indices[indices % self.parser.test_every == 0]
 
     def __len__(self):
         return len(self.indices)

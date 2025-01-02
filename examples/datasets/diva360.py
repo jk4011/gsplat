@@ -48,8 +48,6 @@ class SceneManagerDiva360:
             camera = Camera(1, width, height, [fl_x, fl_y, cx, cy])
 
             self.cameras[camera_id] = camera
-            # if camera_id == 2:
-            #     break
 
     def load_extrinsics_from_json(self):
         with open(self.json_path, "r") as file:
@@ -60,6 +58,7 @@ class SceneManagerDiva360:
         for camera_id, frame in enumerate(frames, 1):
             file_name = frame.get("file_path", "")
             file_name = file_name.replace("undist/", "")
+            file_name = file_name.replace("/00000000", "")
             transform = np.array(frame.get("transform_matrix", []))
 
             if transform.shape == (4, 4):
@@ -73,8 +72,6 @@ class SceneManagerDiva360:
                 self.name_to_image_id[file_name] = camera_id
 
                 self.last_image_id = max(self.last_image_id, camera_id)
-            # if camera_id == 2:
-            #     break
             
 
     def genrate_random_points3D(self, n=100000):
@@ -94,7 +91,7 @@ class SceneManagerDiva360:
 
 # Example usage
 if __name__ == "__main__":
-    json_path = "/data2/wlsgur4011/gsplat/data/Diva360_data/processed_data/penguin/dynamic_data/transforms_train.json"
+    json_path = "/data2/wlsgur4011/GESI/gsplat/data/Diva360_data/3dgs_data/penguin_0217/cameras.json"
     manager = SceneManagerDiva360(json_path)
     manager.load_cameras_from_json()
     manager.load_extrinsics_from_json()
