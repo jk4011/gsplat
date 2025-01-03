@@ -42,6 +42,14 @@ from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 # from gsplat.optimizers import SelectiveAdam
 
+import sys
+sys.path.append("/data2/wlsgur4011/GESI/")
+import torch.nn as nn
+from gesi.helper import rbf_weight
+from gesi.loss import arap_loss
+from gesi.mini_pytorch3d import quaternion_to_matrix
+from jhutil.algorithm import knn as knn_jh
+
 
 @dataclass
 class Config:
@@ -518,7 +526,7 @@ class Runner:
 
         max_steps = cfg.max_steps
         if cfg.single_finetune:
-            init_step = 29000
+            init_step = 30000
         else:
             init_step = 0
 
@@ -849,6 +857,92 @@ class Runner:
                 self.viewer.state.num_train_rays_per_sec = num_train_rays_per_sec
                 # Update the scene.
                 self.viewer.update(step, num_train_rays_per_step)
+    
+    def train_drag(self):
+        from gesi.helper import get_target_indices
+        
+        means_origin = self.splats['means'].clone().detach()
+        anchor = means_origin
+        # load
+        with torch.no_grad():
+            _, _, info = self.render_from_trainloader_iter()
+            
+        means2d = info["means2d"][0]
+        depths = info["depths"][0]
+        drag_from, drag_to = torch.load("/data2/wlsgur4011/GESI/tensors/drag.pth")
+        drag_from = drag_from.to(self.device)
+        drag_to = drag_to.to(self.device)
+        target_indices = get_target_indices(drag_from, means2d, depths)
+        
+        distances, indices_knn = knn_jh(anchor, anchor, k=5)
+        weight = rbf_weight(distances, gamma=30)
+        q = self.init_arap_parameter(num_anchor=len(anchor))
+        
+        for i in range(10000):
+            _, _, info = self.render_from_trainloader_iter()
+            means2d = info["means2d"][0]
+            R = quaternion_to_matrix(F.normalize(q, dim=-1)).squeeze()  # (N, 3, 3)
+            anchor_translated = self.splats['means']
+            loss_arap = arap_loss(anchor, anchor_translated, R, weight, indices_knn)
+            loss_drag = (means2d[target_indices] - drag_to).pow(2).sum()
+            loss = loss_arap + loss_drag
+            
+            loss.backward()
+            for optimizer in self.optimizers.values():
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+            
+    def init_arap_parameter(self, num_anchor):
+        q_init = torch.tensor([1,0,0,0], dtype=torch.float32, device=self.device)
+        q_init = q_init.unsqueeze(0).repeat(num_anchor, 1, 1)
+        t_init = torch.zeros((num_anchor, 3), device=self.device)
+
+        q = nn.Parameter(q_init)  # (N, 3, 3)
+        t = nn.Parameter(t_init)  # (N, 3)
+        
+        lr = 1e-2
+        optimizer = torch.optim.Adam([
+            {'params': q, 'lr': lr},        # Learning rate for R
+        ])
+        self.optimizers["arap"] = optimizer
+        return q
+    
+    def render_from_trainloader_iter(self):
+        
+        if not hasattr(self, "data"):
+            trainloader = torch.utils.data.DataLoader(
+                self.trainset,
+                batch_size=cfg.batch_size,
+                shuffle=True,
+                num_workers=4,
+                persistent_workers=True,
+                pin_memory=True,
+            )
+            trainloader_iter = iter(trainloader)
+            self.data = next(trainloader_iter)
+        data = self.data
+        device = self.device
+        camtoworlds = data["camtoworld"].to(device)  # [1, 4, 4]
+        Ks = data["K"].to(device)  # [1, 3, 3]
+        pixels = data["image"].to(device) / 255.0  # [1, H, W, 3]
+        image_ids = data["image_id"].to(device)
+        masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
+        height, width = pixels.shape[1:3]
+        
+        renders, alphas, info = self.rasterize_splats(
+            camtoworlds=camtoworlds,
+            Ks=Ks,
+            width=width,
+            height=height,
+            sh_degree=3,
+            near_plane=cfg.near_plane,
+            far_plane=cfg.far_plane,
+            image_ids=image_ids,
+            render_mode="RGB+ED" if cfg.depth_loss else "RGB",
+            masks=masks,
+        )
+        return renders, alphas, info
+    
 
     @torch.no_grad()
     def eval(self, step: int, stage: str = "val"):
@@ -1064,6 +1158,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         if cfg.compression is not None:
             runner.run_compression(step=step)
         if cfg.single_finetune:
+            runner.train_drag()
             runner.train()
     else:
         runner.train()

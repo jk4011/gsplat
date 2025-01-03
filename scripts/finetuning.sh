@@ -13,7 +13,7 @@ CUDA_VISIBLE_DEVICES=0 python examples/simple_trainer.py default \
     --ckpt ./results/${object_name}_${origin_idx}/ckpts/ckpt_29999_rank0.pt \
     --data_factor 1 \
     --no_colmap \
-    --single_image \
+    --single_finetune \
     --port 8081 \
     --scale_reg 0.1 \
 
