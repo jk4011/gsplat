@@ -873,7 +873,8 @@ class Runner:
         self,
         drag_iterations=500,
         rgb_iteration=500,
-        coef_arap=1e6,
+        coef_arap_drag=1e4,
+        coef_arap_rgb=1e-1,
         coef_drag=1,
         lr=1e-2,
         is_eval=True
@@ -942,7 +943,7 @@ class Runner:
             means2d, _ = self.project_to_2d(points_lbs[target_indices])
             loss_drag = drag_loss(means2d, drag_to)
             
-            loss = coef_arap * loss_arap + coef_drag * loss_drag
+            loss = coef_arap_drag * loss_arap + coef_drag * loss_drag
 
             loss.backward()
             anchor_optimizer.step()
@@ -970,7 +971,7 @@ class Runner:
             loss_arap = arap_loss(means_origin, self.splats['means'], R, weight, indices_knn)
             loss_rgb = self.render_and_calc_rgb_loss()
             
-            loss = 1e3 * loss_arap + loss_rgb
+            loss = coef_arap_rgb * loss_arap + loss_rgb
             loss.backward()
             
             for var_name in ['means', 'quats']:
