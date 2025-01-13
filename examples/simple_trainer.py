@@ -50,7 +50,7 @@ from gesi.loss import arap_loss, drag_loss
 from gesi.mini_pytorch3d import quaternion_to_matrix
 from jhutil.algorithm import knn as knn_jh
 from gesi.helper import load_points_and_anchor, save_points_and_anchor, make_simple_goal, rbf_weight, deform_point_cloud_arap, voxelize_pointcloud_and_get_means, linear_blend_skinning_knn, cluster_largest, get_target_indices, project_pointcloud_to_2d, deform_point_cloud_arap_2d
-from gesi.mini_pytorch3d import quaternion_multiply
+from gesi.mini_pytorch3d import quaternion_multiply, quaternion_invert
 
 @dataclass
 class Config:
@@ -871,11 +871,17 @@ class Runner:
 
     def train_drag(
         self,
-        num_iterations=500,
+        drag_iterations=500,
+        rgb_iteration=500,
         coef_arap=1e6,
         coef_drag=1,
         lr=1e-2,
+        is_eval=True
     ):
+        quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
+        if is_eval:
+            step = 0
+            self.eval(step=step)
         ##########################################################
         ################ 1. get target using drag ################
         ##########################################################
@@ -887,10 +893,8 @@ class Runner:
         drag_to = drag_to.to(self.device).to(torch.float32)
         # set drag
         with torch.no_grad():
-            _, _, info = self.render_from_train_image()
+            means2d, depths = self.project_to_2d(points)
 
-        means2d = info["means2d"][0]
-        depths = info["depths"][0]
         target_indices = get_target_indices(drag_from, means2d, depths)
 
         ##########################################################
@@ -917,29 +921,25 @@ class Runner:
         )
 
         ##########################################################
-        ###################### 3. optimize #######################
+        #################### 3. drag optimize ####################
         ##########################################################
-        quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
+        from jhutil import color_log; color_log("aaaa", "drag optimize start")
         with torch.no_grad():
             distances, indices_knn = knn_jh(anchor, anchor, k=5)
             weight = rbf_weight(distances, gamma=30)
 
-        for i in range(num_iterations):
+        for i in range(drag_iterations):
             R = quaternion_to_matrix(F.normalize(q, dim=-1)).squeeze()  # (N, 3, 3)
             anchor_translated = anchor + t  # (N, 3)
             
             loss_arap = arap_loss(anchor, anchor_translated, R, weight, indices_knn)
             
-            points_deformed, blended_quats = linear_blend_skinning_knn(points, anchor, R, t)
-            self.splats['means'] = points_deformed
-            self.splats['quats'] = quaternion_multiply(blended_quats, quats_origin)
+            points_lbs, quats_lbs = linear_blend_skinning_knn(points, anchor, R, t)
+            quats_multiplied = quaternion_multiply(quats_lbs, quats_origin)
+            self.splats['means'].data.copy_(points_lbs)
+            self.splats['quats'].data.copy_(quats_multiplied)
             
-            project_with_rasterizer = False
-            if project_with_rasterizer:
-                renders, _, info = self.render_from_train_image()
-                means2d = info["means2d"][0][target_indices]
-            else:
-                means2d = self.project_to_2d(points_deformed[target_indices])
+            means2d, _ = self.project_to_2d(points_lbs[target_indices])
             loss_drag = drag_loss(means2d, drag_to)
             
             loss = coef_arap * loss_arap + coef_drag * loss_drag
@@ -947,10 +947,42 @@ class Runner:
             loss.backward()
             anchor_optimizer.step()
             anchor_optimizer.zero_grad()
-            # for optimizer in self.optimizers.values():
-            #     optimizer.step()
-            #     optimizer.zero_grad(set_to_none=True)
+        
+        if is_eval:
+            step += drag_iterations
+            self.eval(step=step)
+        ##########################################################
+        #################### 4. rgb optimize #####################
+        ##########################################################
+        
+        means_origin = self.splats['means'].clone().detach()
+        quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
+        quats_origin_invert = quaternion_invert(quats_origin)
+        with torch.no_grad():
+            distances, indices_knn = knn_jh(means_origin, means_origin, k=5)
+            weight = rbf_weight(distances, gamma=30)
 
+        for i in range(rgb_iteration):
+            # arap loss
+            quats_current = F.normalize(self.splats['quats'], dim=-1)
+            q = quaternion_multiply(quats_current, quats_origin_invert)
+            R = quaternion_to_matrix(q).squeeze()  # (N, 3, 3)
+            loss_arap = arap_loss(means_origin, self.splats['means'], R, weight, indices_knn)
+            loss_rgb = self.render_and_calc_rgb_loss()
+            
+            loss = 1e3 * loss_arap + loss_rgb
+            loss.backward()
+            
+            for var_name in ['means', 'quats']:
+                optimizer = self.optimizers[var_name]
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+
+        if is_eval:
+            step += rgb_iteration
+            self.eval(step=step)
+            
+            
     def project_to_2d(self, points):
         if not hasattr(self, "data"):
             trainloader = torch.utils.data.DataLoader(
@@ -968,9 +1000,9 @@ class Runner:
         camtoworlds = data["camtoworld"].to(device)  # [1, 4, 4]
         Ks = data["K"].to(device)  # [1, 3, 3]
         means2d, depth = project_pointcloud_to_2d(points, camtoworlds, Ks)
-        return means2d
+        return means2d, depth
     
-    def render_from_train_image(self):
+    def render_and_calc_rgb_loss(self):
 
         if not hasattr(self, "data"):
             trainloader = torch.utils.data.DataLoader(
@@ -1004,7 +1036,12 @@ class Runner:
             render_mode="RGB+ED" if cfg.depth_loss else "RGB",
             masks=masks,
         )
-        return renders, alphas, info
+        if renders.shape[-1] == 4:
+            colors, depths = renders[..., 0:3], renders[..., 3:4]
+        else:
+            colors, depths = renders, None
+        rgb_loss = F.l1_loss(colors, pixels)
+        return rgb_loss
 
     @torch.no_grad()
     def eval(self, step: int, stage: str = "val"):
@@ -1221,7 +1258,6 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             runner.run_compression(step=step)
         if cfg.single_finetune:
             runner.train_drag()
-            runner.train()
     else:
         runner.train()
 
