@@ -81,7 +81,7 @@ class SceneManagerDiva360:
         self.bbox = np.array(
             [np.min(translation_list, axis=0), np.max(translation_list, axis=0)]
         )
-        self.points3D = np.random.uniform(-3, 3, (n, 3))
+        self.points3D = np.random.uniform(-1, 1, (n, 3))
         self.point3D_colors = np.ones((n, 3), dtype=np.uint8) * 255
         self.point3D_errors = np.random.rand(n)
         self.point3D_id_to_images = {}

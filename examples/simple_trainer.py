@@ -43,13 +43,14 @@ from gsplat.strategy import DefaultStrategy, MCMCStrategy
 # from gsplat.optimizers import SelectiveAdam
 
 import sys
+
 sys.path.append("/data2/wlsgur4011/GESI/")
 import torch.nn as nn
-from gesi.helper import rbf_weight
-from gesi.loss import arap_loss
+from gesi.loss import arap_loss, drag_loss
 from gesi.mini_pytorch3d import quaternion_to_matrix
 from jhutil.algorithm import knn as knn_jh
-
+from gesi.helper import load_points_and_anchor, save_points_and_anchor, make_simple_goal, rbf_weight, deform_point_cloud_arap, voxelize_pointcloud_and_get_means, linear_blend_skinning_knn, cluster_largest, get_target_indices, project_pointcloud_to_2d, deform_point_cloud_arap_2d
+from gesi.mini_pytorch3d import quaternion_multiply
 
 @dataclass
 class Config:
@@ -88,11 +89,15 @@ class Config:
     steps_scaler: float = 1.0
 
     # Number of training steps
-    max_steps: int = 30_000
+    max_steps: int = 10000
     # Steps to evaluate the model
-    eval_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    eval_steps: List[int] = field(
+        default_factory=lambda: [3000, 4000, 5000, 6000, 7_000, 8000]
+    )
     # Steps to save the model
-    save_steps: List[int] = field(default_factory=lambda: [7_000, 30_000])
+    save_steps: List[int] = field(
+        default_factory=lambda: [3000, 4000, 5000, 6000, 7_000, 8000]
+    )
 
     # Initialization strategy
     init_type: str = "sfm"
@@ -171,9 +176,9 @@ class Config:
     tb_save_image: bool = False
 
     lpips_net: Literal["vgg", "alex"] = "alex"
-    
+
     no_colmap: bool = False
-    
+
     single_finetune: bool = False
 
     def adjust_steps(self, factor: float):
@@ -326,7 +331,9 @@ class Runner:
             load_depths=cfg.depth_loss,
             single_finetune=cfg.single_finetune,
         )
-        self.valset = Dataset(self.parser, split="val", single_finetune=cfg.single_finetune)
+        self.valset = Dataset(
+            self.parser, split="val", single_finetune=cfg.single_finetune
+        )
         self.scene_scale = self.parser.scene_scale * 1.1 * cfg.global_scale
         print("Scene scale:", self.scene_scale)
 
@@ -695,11 +702,15 @@ class Runner:
                 #     loss
                 #     + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"])).mean()
                 # )
-                
+
                 # Gaussian marble
                 loss = (
                     loss
-                    + cfg.scale_reg * torch.abs(torch.exp(self.splats["scales"].max(dim=-1)[0]) - torch.exp(self.splats["scales"].min(dim=-1)[0])).mean()
+                    + cfg.scale_reg
+                    * torch.abs(
+                        torch.exp(self.splats["scales"].max(dim=-1)[0])
+                        - torch.exp(self.splats["scales"].min(dim=-1)[0])
+                    ).mean()
                 )
 
             if step % 1000 == 0:
@@ -857,58 +868,110 @@ class Runner:
                 self.viewer.state.num_train_rays_per_sec = num_train_rays_per_sec
                 # Update the scene.
                 self.viewer.update(step, num_train_rays_per_step)
-    
-    def train_drag(self):
-        from gesi.helper import get_target_indices
+
+    def train_drag(
+        self,
+        num_iterations=500,
+        coef_arap=1e6,
+        coef_drag=1,
+        lr=1e-2,
+    ):
+        ##########################################################
+        ################ 1. get target using drag ################
+        ##########################################################
+        points = self.splats.means.clone().detach()
+        points.requires_grad = False
         
-        means_origin = self.splats['means'].clone().detach()
-        anchor = means_origin
-        # load
+        drag_from, drag_to = torch.load("/data2/wlsgur4011/GESI/tensors/drag_50.pth")
+        drag_from = drag_from.to(self.device).to(torch.float32)
+        drag_to = drag_to.to(self.device).to(torch.float32)
+        # set drag
         with torch.no_grad():
-            _, _, info = self.render_from_trainloader_iter()
-            
+            _, _, info = self.render_from_train_image()
+
         means2d = info["means2d"][0]
         depths = info["depths"][0]
-        drag_from, drag_to = torch.load("/data2/wlsgur4011/GESI/tensors/drag.pth")
-        drag_from = drag_from.to(self.device)
-        drag_to = drag_to.to(self.device)
         target_indices = get_target_indices(drag_from, means2d, depths)
-        
-        distances, indices_knn = knn_jh(anchor, anchor, k=5)
-        weight = rbf_weight(distances, gamma=30)
-        q = self.init_arap_parameter(num_anchor=len(anchor))
-        
-        for i in range(10000):
-            _, _, info = self.render_from_trainloader_iter()
-            means2d = info["means2d"][0]
-            R = quaternion_to_matrix(F.normalize(q, dim=-1)).squeeze()  # (N, 3, 3)
-            anchor_translated = self.splats['means']
-            loss_arap = arap_loss(anchor, anchor_translated, R, weight, indices_knn)
-            loss_drag = (means2d[target_indices] - drag_to).pow(2).sum()
-            loss = loss_arap + loss_drag
-            
-            loss.backward()
-            for optimizer in self.optimizers.values():
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
-            
-    def init_arap_parameter(self, num_anchor):
-        q_init = torch.tensor([1,0,0,0], dtype=torch.float32, device=self.device)
-        q_init = q_init.unsqueeze(0).repeat(num_anchor, 1, 1)
-        t_init = torch.zeros((num_anchor, 3), device=self.device)
+
+        ##########################################################
+        ########### 2. initialize anchor and optimizer ###########
+        ##########################################################
+
+        # set anchor
+        anchor = voxelize_pointcloud_and_get_means(points, 0.05)
+
+        N = anchor.shape[0]
+        q_init = torch.tensor([1, 0, 0, 0], dtype=torch.float32, device=self.device)
+        q_init = q_init.unsqueeze(0).repeat(N, 1, 1)
+        t_init = torch.zeros((N, 3), dtype=torch.float32, device=self.device)
 
         q = nn.Parameter(q_init)  # (N, 3, 3)
         t = nn.Parameter(t_init)  # (N, 3)
-        
-        lr = 1e-2
-        optimizer = torch.optim.Adam([
-            {'params': q, 'lr': lr},        # Learning rate for R
-        ])
-        self.optimizers["arap"] = optimizer
-        return q
+
+        # 최적화 알고리즘(Adam)
+        anchor_optimizer = torch.optim.Adam(
+            [
+                {"params": q, "lr": lr},  # Learning rate for R
+                {"params": t, "lr": lr},  # Learning rate for t (e.g., 10 times smaller)
+            ]
+        )
+
+        ##########################################################
+        ###################### 3. optimize #######################
+        ##########################################################
+        quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
+        with torch.no_grad():
+            distances, indices_knn = knn_jh(anchor, anchor, k=5)
+            weight = rbf_weight(distances, gamma=30)
+
+        for i in range(num_iterations):
+            R = quaternion_to_matrix(F.normalize(q, dim=-1)).squeeze()  # (N, 3, 3)
+            anchor_translated = anchor + t  # (N, 3)
+            
+            loss_arap = arap_loss(anchor, anchor_translated, R, weight, indices_knn)
+            
+            points_deformed, blended_quats = linear_blend_skinning_knn(points, anchor, R, t)
+            self.splats['means'] = points_deformed
+            self.splats['quats'] = quaternion_multiply(blended_quats, quats_origin)
+            
+            project_with_rasterizer = False
+            if project_with_rasterizer:
+                renders, _, info = self.render_from_train_image()
+                means2d = info["means2d"][0][target_indices]
+            else:
+                means2d = self.project_to_2d(points_deformed[target_indices])
+            loss_drag = drag_loss(means2d, drag_to)
+            
+            loss = coef_arap * loss_arap + coef_drag * loss_drag
+
+            loss.backward()
+            anchor_optimizer.step()
+            anchor_optimizer.zero_grad()
+            # for optimizer in self.optimizers.values():
+            #     optimizer.step()
+            #     optimizer.zero_grad(set_to_none=True)
+
+    def project_to_2d(self, points):
+        if not hasattr(self, "data"):
+            trainloader = torch.utils.data.DataLoader(
+                self.trainset,
+                batch_size=cfg.batch_size,
+                shuffle=True,
+                num_workers=4,
+                persistent_workers=True,
+                pin_memory=True,
+            )
+            trainloader_iter = iter(trainloader)
+            self.data = next(trainloader_iter)
+        data = self.data
+        device = self.device
+        camtoworlds = data["camtoworld"].to(device)  # [1, 4, 4]
+        Ks = data["K"].to(device)  # [1, 3, 3]
+        means2d, depth = project_pointcloud_to_2d(points, camtoworlds, Ks)
+        return means2d
     
-    def render_from_trainloader_iter(self):
-        
+    def render_from_train_image(self):
+
         if not hasattr(self, "data"):
             trainloader = torch.utils.data.DataLoader(
                 self.trainset,
@@ -928,7 +991,7 @@ class Runner:
         image_ids = data["image_id"].to(device)
         masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
         height, width = pixels.shape[1:3]
-        
+
         renders, alphas, info = self.rasterize_splats(
             camtoworlds=camtoworlds,
             Ks=Ks,
@@ -942,7 +1005,6 @@ class Runner:
             masks=masks,
         )
         return renders, alphas, info
-    
 
     @torch.no_grad()
     def eval(self, step: int, stage: str = "val"):
