@@ -51,6 +51,8 @@ from gesi.mini_pytorch3d import quaternion_to_matrix
 from jhutil.algorithm import knn as knn_jh
 from gesi.helper import load_points_and_anchor, save_points_and_anchor, make_simple_goal, rbf_weight, deform_point_cloud_arap, voxelize_pointcloud_and_get_means, linear_blend_skinning_knn, cluster_largest, get_target_indices, get_target_indices_drag, project_pointcloud_to_2d, deform_point_cloud_arap_2d
 from gesi.mini_pytorch3d import quaternion_multiply, quaternion_invert
+from jhutil import save_img, convert_to_gif
+
 
 @dataclass
 class Config:
@@ -181,6 +183,8 @@ class Config:
 
     single_finetune: bool = False
 
+    finetuning_drot: bool = False
+    
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
         self.save_steps = [int(i * factor) for i in self.save_steps]
@@ -873,11 +877,12 @@ class Runner:
         self,
         drag_iterations=500,
         rgb_iteration=500,
-        coef_arap_drag=1e4,
+        coef_arap_drag=3e4,
         coef_arap_rgb=1e-1,
         coef_drag=1,
         lr=1e-2,
-        is_eval=True
+        is_eval=True,
+        save_image=False,
     ):
         if is_eval:
             step = 0
@@ -888,15 +893,17 @@ class Runner:
         points = self.splats.means.clone().detach()
         points.requires_grad = True
         
-        drag_from, drag_to = torch.load("/data2/wlsgur4011/GESI/tensors/drag_50.pth")
+        drag_from, drag_to = torch.load("/data2/wlsgur4011/GESI/tensors/drag_roma.pth")
         drag_from = drag_from.to(self.device).to(torch.float32)
         drag_to = drag_to.to(self.device).to(torch.float32)
         # set drag
         with torch.no_grad():
             means2d, depths = self.project_to_2d(points)
 
-        target_indices = get_target_indices_drag(drag_from, means2d, depths)
-
+        target_indices = get_target_indices(means2d, depths)
+        _, indices = knn_jh(means2d[target_indices], drag_from, k=1)
+        drag_to = drag_to[indices.squeeze()]
+        
         ##########################################################
         ########### 2. initialize anchor and optimizer ###########
         ##########################################################
@@ -920,7 +927,7 @@ class Runner:
         ##########################################################
         #################### 3. drag optimize ####################
         ##########################################################
-        from jhutil import color_log; color_log("aaaa", "drot optimize start")
+        from jhutil import color_log; color_log("aaaa", "drag optimize start")
         with torch.no_grad():
             distances, indices_knn = knn_jh(anchor, anchor, k=5)
             weight = rbf_weight(distances, gamma=30)
@@ -942,9 +949,21 @@ class Runner:
             
             loss = coef_arap_drag * loss_arap + coef_drag * loss_drag
 
-            loss.backward()
+            loss.backward(retain_graph=True)
             anchor_optimizer.step()
             anchor_optimizer.zero_grad()
+            
+            if save_image:
+                with torch.no_grad():
+                    image_from, image_to = self.render_from_train_camera()
+                image_from = image_from[:, 150:550, 350:750]
+                image_to = image_to[:, 150:550, 350:750]
+                image_concat = torch.cat([image_from.squeeze(), image_to.squeeze()], dim=1)
+                folder_path = "/data2/wlsgur4011/GESI/output_images/drag"
+                os.makedirs(folder_path, exist_ok=True)
+                save_img(image_concat, os.path.join(folder_path, f"drag_{i}.png"))
+                if i == drag_iterations - 1:
+                    convert_to_gif(folder_path)
         
         if is_eval:
             step += drag_iterations
@@ -981,17 +1000,28 @@ class Runner:
             step += rgb_iteration
             self.eval(step=step)
     
+        if save_image:
+            with torch.no_grad():
+                image_from, image_to = self.render_from_train_camera()
+            image_from = image_from[:, 150:550, 350:750]
+            image_to = image_to[:, 150:550, 350:750]
+            image_concat = torch.cat([image_from.squeeze(), image_to.squeeze()], dim=1)
+            folder_path = "/data2/wlsgur4011/GESI/output_images/drag"
+            os.makedirs(folder_path, exist_ok=True)
+            from jhutil import color_log; color_log(1111, os.path.join(folder_path, f"rgb.png"))
+            save_img(image_concat, os.path.join(folder_path, f"rgb.png"))
     
     def train_drot(
         self,
         drot_iterations=300,
         rgb_iteration=500,
         coef_arap_drag=1e5,
-        coef_arap_rgb=1e-1,
+        coef_arap_rgb=1e2,
         coef_drot=1,
         lr_anchor=1e-2,
         is_eval=True,
         crop_image=True,
+        save_image=False,
     ):
         if is_eval:
             step = 0
@@ -1026,6 +1056,7 @@ class Runner:
             
         quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
         
+        from jhutil import color_log; color_log("aaaa", "drot optimize start")
         
         for i in range(drot_iterations + 1):
             ##########################################################
@@ -1055,6 +1086,13 @@ class Runner:
                 image_to = image_to[:, 150:550, 350:750]
                 means2d_target[:, 0] = (means2d_target[:, 0] - 350)
                 means2d_target[:, 1] = (means2d_target[:, 1] - 150)
+            if save_image:
+                image_concat = torch.cat([image_from.squeeze(), image_to.squeeze()], dim=1)
+                folder_path = "/data2/wlsgur4011/GESI/output_images/drot"
+                os.makedirs(folder_path, exist_ok=True)
+                save_img(image_concat, os.path.join(folder_path, f"drot_{i}.png"))
+                if i == drot_iterations:
+                    convert_to_gif(folder_path)
             
             loss_drot = drot_loss(image_from, image_to, means2d_target)
             
@@ -1076,33 +1114,33 @@ class Runner:
         ##########################################################
         #################### 4. rgb optimize #####################
         ##########################################################
-        # from jhutil import color_log; color_log("bbbb", "rgb optimize start")
+        from jhutil import color_log; color_log("bbbb", "rgb optimize start")
         
-        # means_origin = self.splats['means'].clone().detach()
-        # quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
-        # quats_origin_invert = quaternion_invert(quats_origin)
-        # with torch.no_grad():
-        #     distances, indices_knn = knn_jh(means_origin, means_origin, k=5)
-        #     weight = rbf_weight(distances, gamma=30)
+        means_origin = self.splats['means'].clone().detach()
+        quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
+        quats_origin_invert = quaternion_invert(quats_origin)
+        with torch.no_grad():
+            distances, indices_knn = knn_jh(means_origin, means_origin, k=5)
+            weight = rbf_weight(distances, gamma=30)
 
-        # for i in range(rgb_iteration):
-        #     quats_current = F.normalize(self.splats['quats'], dim=-1)
-        #     q = quaternion_multiply(quats_current, quats_origin_invert)
-        #     R = quaternion_to_matrix(q).squeeze()  # (N, 3, 3)
-        #     loss_arap = arap_loss(means_origin, self.splats['means'], R, weight, indices_knn)
-        #     loss_rgb = self.render_and_calc_rgb_loss()
+        for i in range(rgb_iteration):
+            quats_current = F.normalize(self.splats['quats'], dim=-1)
+            q = quaternion_multiply(quats_current, quats_origin_invert)
+            R = quaternion_to_matrix(q).squeeze()  # (N, 3, 3)
+            loss_arap = arap_loss(means_origin, self.splats['means'], R, weight, indices_knn)
+            loss_rgb = self.render_and_calc_rgb_loss()
             
-        #     loss = coef_arap_rgb * loss_arap + loss_rgb
-        #     loss.backward()
+            loss = coef_arap_rgb * loss_arap + loss_rgb
+            loss.backward()
             
-        #     for var_name in ['means', 'quats']:
-        #         optimizer = self.optimizers[var_name]
-        #         optimizer.step()
-        #         optimizer.zero_grad(set_to_none=True)
+            for var_name in ['means', 'quats']:
+                optimizer = self.optimizers[var_name]
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
 
-        # if is_eval:
-        #     step += rgb_iteration
-        #     self.eval(step=step)
+        if is_eval:
+            step += rgb_iteration
+            self.eval(step=step)
     
     
     def project_to_2d(self, points):
@@ -1385,8 +1423,10 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         if cfg.compression is not None:
             runner.run_compression(step=step)
         if cfg.single_finetune:
-            # runner.train_drag()
-            runner.train_drot()
+            if cfg.finetuning_drot:
+                runner.train_drot()
+            else:
+                runner.train_drag()
     else:
         runner.train()
 
