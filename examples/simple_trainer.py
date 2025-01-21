@@ -46,10 +46,10 @@ import sys
 
 sys.path.append("/data2/wlsgur4011/GESI/")
 import torch.nn as nn
-from gesi.loss import arap_loss, drag_loss
+from gesi.loss import arap_loss, drag_loss, drot_loss
 from gesi.mini_pytorch3d import quaternion_to_matrix
 from jhutil.algorithm import knn as knn_jh
-from gesi.helper import load_points_and_anchor, save_points_and_anchor, make_simple_goal, rbf_weight, deform_point_cloud_arap, voxelize_pointcloud_and_get_means, linear_blend_skinning_knn, cluster_largest, get_target_indices, project_pointcloud_to_2d, deform_point_cloud_arap_2d
+from gesi.helper import load_points_and_anchor, save_points_and_anchor, make_simple_goal, rbf_weight, deform_point_cloud_arap, voxelize_pointcloud_and_get_means, linear_blend_skinning_knn, cluster_largest, get_target_indices, get_target_indices_drag, project_pointcloud_to_2d, deform_point_cloud_arap_2d
 from gesi.mini_pytorch3d import quaternion_multiply, quaternion_invert
 
 @dataclass
@@ -879,7 +879,6 @@ class Runner:
         lr=1e-2,
         is_eval=True
     ):
-        quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
         if is_eval:
             step = 0
             self.eval(step=step)
@@ -887,7 +886,7 @@ class Runner:
         ################ 1. get target using drag ################
         ##########################################################
         points = self.splats.means.clone().detach()
-        points.requires_grad = False
+        points.requires_grad = True
         
         drag_from, drag_to = torch.load("/data2/wlsgur4011/GESI/tensors/drag_50.pth")
         drag_from = drag_from.to(self.device).to(torch.float32)
@@ -896,13 +895,11 @@ class Runner:
         with torch.no_grad():
             means2d, depths = self.project_to_2d(points)
 
-        target_indices = get_target_indices(drag_from, means2d, depths)
+        target_indices = get_target_indices_drag(drag_from, means2d, depths)
 
         ##########################################################
         ########### 2. initialize anchor and optimizer ###########
         ##########################################################
-
-        # set anchor
         anchor = voxelize_pointcloud_and_get_means(points, 0.05)
 
         N = anchor.shape[0]
@@ -913,7 +910,6 @@ class Runner:
         q = nn.Parameter(q_init)  # (N, 3, 3)
         t = nn.Parameter(t_init)  # (N, 3)
 
-        # 최적화 알고리즘(Adam)
         anchor_optimizer = torch.optim.Adam(
             [
                 {"params": q, "lr": lr},  # Learning rate for R
@@ -924,11 +920,12 @@ class Runner:
         ##########################################################
         #################### 3. drag optimize ####################
         ##########################################################
-        from jhutil import color_log; color_log("aaaa", "drag optimize start")
+        from jhutil import color_log; color_log("aaaa", "drot optimize start")
         with torch.no_grad():
             distances, indices_knn = knn_jh(anchor, anchor, k=5)
             weight = rbf_weight(distances, gamma=30)
-
+        quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
+        
         for i in range(drag_iterations):
             R = quaternion_to_matrix(F.normalize(q, dim=-1)).squeeze()  # (N, 3, 3)
             anchor_translated = anchor + t  # (N, 3)
@@ -952,9 +949,11 @@ class Runner:
         if is_eval:
             step += drag_iterations
             self.eval(step=step)
+        
         ##########################################################
         #################### 4. rgb optimize #####################
         ##########################################################
+        from jhutil import color_log; color_log("bbbb", "rgb optimize start")
         
         means_origin = self.splats['means'].clone().detach()
         quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
@@ -964,7 +963,6 @@ class Runner:
             weight = rbf_weight(distances, gamma=30)
 
         for i in range(rgb_iteration):
-            # arap loss
             quats_current = F.normalize(self.splats['quats'], dim=-1)
             q = quaternion_multiply(quats_current, quats_origin_invert)
             R = quaternion_to_matrix(q).squeeze()  # (N, 3, 3)
@@ -982,8 +980,131 @@ class Runner:
         if is_eval:
             step += rgb_iteration
             self.eval(step=step)
+    
+    
+    def train_drot(
+        self,
+        drot_iterations=300,
+        rgb_iteration=500,
+        coef_arap_drag=1e5,
+        coef_arap_rgb=1e-1,
+        coef_drot=1,
+        lr_anchor=1e-2,
+        is_eval=True,
+        crop_image=True,
+    ):
+        if is_eval:
+            step = 0
+            self.eval(step=step)
             
+        points = self.splats.means.clone().detach()
+        points.requires_grad = False
+
+        ##########################################################
+        ########### 1. initialize anchor and optimizer ###########
+        ##########################################################
+        anchor = voxelize_pointcloud_and_get_means(points, 0.05)
+
+        N = anchor.shape[0]
+        q_init = torch.tensor([1, 0, 0, 0], dtype=torch.float32, device=self.device)
+        q_init = q_init.unsqueeze(0).repeat(N, 1, 1)
+        t_init = torch.zeros((N, 3), dtype=torch.float32, device=self.device)
+
+        q = nn.Parameter(q_init)  # (N, 3, 3)
+        t = nn.Parameter(t_init)  # (N, 3)
+
+        anchor_optimizer = torch.optim.Adam(
+            [
+                {"params": q, "lr": lr_anchor},  # Learning rate for R
+                {"params": t, "lr": lr_anchor},  # Learning rate for t (e.g., 10 times smaller)
+            ]
+        )
+
+        with torch.no_grad():
+            distances, indices_knn = knn_jh(anchor, anchor, k=5)
+            weight = rbf_weight(distances, gamma=30)
             
+        quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
+        
+        
+        for i in range(drot_iterations + 1):
+            ##########################################################
+            ###################### 2. arap loss ######################
+            ##########################################################
+            R = quaternion_to_matrix(F.normalize(q, dim=-1)).squeeze()  # (N, 3, 3)
+            anchor_translated = anchor + t  # (N, 3)
+            
+            loss_arap = arap_loss(anchor, anchor_translated, R, weight, indices_knn)
+            
+            points_lbs, quats_lbs = linear_blend_skinning_knn(points, anchor, R, t)
+            quats_multiplied = quaternion_multiply(quats_lbs, quats_origin)
+            
+            self.splats['means'].data.copy_(points_lbs)
+            self.splats['quats'].data.copy_(quats_multiplied)
+            
+            means2d, depths = self.project_to_2d(points_lbs)
+            target_indices = get_target_indices(means2d, depths)
+            means2d_target = means2d[target_indices]
+            
+            with torch.no_grad():
+                image_from, image_to = self.render_from_train_camera()
+            
+            if crop_image:
+                # TODO: crop image using black background
+                image_from = image_from[:, 150:550, 350:750]
+                image_to = image_to[:, 150:550, 350:750]
+                means2d_target[:, 0] = (means2d_target[:, 0] - 350)
+                means2d_target[:, 1] = (means2d_target[:, 1] - 150)
+            
+            loss_drot = drot_loss(image_from, image_to, means2d_target)
+            
+            loss = coef_arap_drag * loss_arap + coef_drot * loss_drot
+
+            loss.backward()
+            anchor_optimizer.step()
+            anchor_optimizer.zero_grad()
+        
+            print(f"Step [{i}] - Arap loss: {loss_arap.item():.6f}   Drot loss: {loss_drot.item():.6f}")
+            
+            if i % 20 == 0:
+                coef_arap_drag *= 0.8
+
+        if is_eval:
+            step += drot_iterations
+            self.eval(step=step)
+        
+        ##########################################################
+        #################### 4. rgb optimize #####################
+        ##########################################################
+        # from jhutil import color_log; color_log("bbbb", "rgb optimize start")
+        
+        # means_origin = self.splats['means'].clone().detach()
+        # quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
+        # quats_origin_invert = quaternion_invert(quats_origin)
+        # with torch.no_grad():
+        #     distances, indices_knn = knn_jh(means_origin, means_origin, k=5)
+        #     weight = rbf_weight(distances, gamma=30)
+
+        # for i in range(rgb_iteration):
+        #     quats_current = F.normalize(self.splats['quats'], dim=-1)
+        #     q = quaternion_multiply(quats_current, quats_origin_invert)
+        #     R = quaternion_to_matrix(q).squeeze()  # (N, 3, 3)
+        #     loss_arap = arap_loss(means_origin, self.splats['means'], R, weight, indices_knn)
+        #     loss_rgb = self.render_and_calc_rgb_loss()
+            
+        #     loss = coef_arap_rgb * loss_arap + loss_rgb
+        #     loss.backward()
+            
+        #     for var_name in ['means', 'quats']:
+        #         optimizer = self.optimizers[var_name]
+        #         optimizer.step()
+        #         optimizer.zero_grad(set_to_none=True)
+
+        # if is_eval:
+        #     step += rgb_iteration
+        #     self.eval(step=step)
+    
+    
     def project_to_2d(self, points):
         if not hasattr(self, "data"):
             trainloader = torch.utils.data.DataLoader(
@@ -1003,8 +1124,8 @@ class Runner:
         means2d, depth = project_pointcloud_to_2d(points, camtoworlds, Ks)
         return means2d, depth
     
-    def render_and_calc_rgb_loss(self):
-
+    def render_from_train_camera(self):
+        
         if not hasattr(self, "data"):
             trainloader = torch.utils.data.DataLoader(
                 self.trainset,
@@ -1020,10 +1141,10 @@ class Runner:
         device = self.device
         camtoworlds = data["camtoworld"].to(device)  # [1, 4, 4]
         Ks = data["K"].to(device)  # [1, 3, 3]
-        pixels = data["image"].to(device) / 255.0  # [1, H, W, 3]
+        gt_images = data["image"].to(device) / 255.0  # [1, H, W, 3]
         image_ids = data["image_id"].to(device)
         masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
-        height, width = pixels.shape[1:3]
+        height, width = gt_images.shape[1:3]
 
         renders, alphas, info = self.rasterize_splats(
             camtoworlds=camtoworlds,
@@ -1037,11 +1158,17 @@ class Runner:
             render_mode="RGB+ED" if cfg.depth_loss else "RGB",
             masks=masks,
         )
+        
+        return renders, gt_images
+    
+    
+    def render_and_calc_rgb_loss(self):
+        renders, gt_images = self.render_from_train_camera()
         if renders.shape[-1] == 4:
             colors, depths = renders[..., 0:3], renders[..., 3:4]
         else:
             colors, depths = renders, None
-        rgb_loss = F.l1_loss(colors, pixels)
+        rgb_loss = F.l1_loss(colors, gt_images)
         return rgb_loss
 
     @torch.no_grad()
@@ -1258,7 +1385,8 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         if cfg.compression is not None:
             runner.run_compression(step=step)
         if cfg.single_finetune:
-            runner.train_drag()
+            # runner.train_drag()
+            runner.train_drot()
     else:
         runner.train()
 
