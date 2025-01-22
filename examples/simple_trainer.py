@@ -45,6 +45,8 @@ from gsplat.strategy import DefaultStrategy, MCMCStrategy
 import sys
 
 sys.path.append("/data2/wlsgur4011/GESI/")
+sys.path.append("/data2/wlsgur4011/GESI/RoMa")
+
 import torch.nn as nn
 from gesi.loss import arap_loss, drag_loss, drot_loss
 from gesi.mini_pytorch3d import quaternion_to_matrix
@@ -52,6 +54,7 @@ from jhutil.algorithm import knn as knn_jh
 from gesi.helper import load_points_and_anchor, save_points_and_anchor, make_simple_goal, rbf_weight, deform_point_cloud_arap, voxelize_pointcloud_and_get_means, linear_blend_skinning_knn, cluster_largest, get_target_indices, get_target_indices_drag, project_pointcloud_to_2d, deform_point_cloud_arap_2d
 from gesi.mini_pytorch3d import quaternion_multiply, quaternion_invert
 from jhutil import save_img, convert_to_gif
+from gesi.roma import get_drag_roma_tensor, match_two_image_roma
 
 
 @dataclass
@@ -887,15 +890,25 @@ class Runner:
         if is_eval:
             step = 0
             self.eval(step=step)
+        
+        ##########################################################
+        ################## 0. get drag via RoMa ##################
+        ##########################################################
+        
+        with torch.no_grad():
+            image_from, image_to = self.render_from_train_camera(return_rgba=True)
+            drag_from, drag_to = get_drag_roma_tensor(image_from, image_to)
+        
+        drag_from = drag_from.to(self.device).to(torch.float32)
+        drag_to = drag_to.to(self.device).to(torch.float32)
+        
+            
         ##########################################################
         ################ 1. get target using drag ################
         ##########################################################
         points = self.splats.means.clone().detach()
         points.requires_grad = True
         
-        drag_from, drag_to = torch.load("/data2/wlsgur4011/GESI/tensors/drag_roma.pth")
-        drag_from = drag_from.to(self.device).to(torch.float32)
-        drag_to = drag_to.to(self.device).to(torch.float32)
         # set drag
         with torch.no_grad():
             means2d, depths = self.project_to_2d(points)
@@ -1162,7 +1175,7 @@ class Runner:
         means2d, depth = project_pointcloud_to_2d(points, camtoworlds, Ks)
         return means2d, depth
     
-    def render_from_train_camera(self):
+    def render_from_train_camera(self, return_rgba=False):
         
         if not hasattr(self, "data"):
             trainloader = torch.utils.data.DataLoader(
@@ -1180,6 +1193,7 @@ class Runner:
         camtoworlds = data["camtoworld"].to(device)  # [1, 4, 4]
         Ks = data["K"].to(device)  # [1, 3, 3]
         gt_images = data["image"].to(device) / 255.0  # [1, H, W, 3]
+        gt_alphas = data["alpha"].to(device) / 255.0  # [1, H, W, 1]
         image_ids = data["image_id"].to(device)
         masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
         height, width = gt_images.shape[1:3]
@@ -1196,6 +1210,9 @@ class Runner:
             render_mode="RGB+ED" if cfg.depth_loss else "RGB",
             masks=masks,
         )
+        if return_rgba:
+            renders = torch.concat([renders, alphas], dim=-1)
+            gt_images = torch.concat([gt_images, gt_alphas], dim=-1)
         
         return renders, gt_images
     
