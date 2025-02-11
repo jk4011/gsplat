@@ -3,9 +3,8 @@ SECONDS=0
 set -e        # exit when error
 set -o xtrace # print command
 
-object_name=penguin
-frame_index=0217
-# 0239 0217
+object_name=$1
+frame_index=$2
 
 data_folder=/data2/wlsgur4011/Diva360_data
 origin_folder=${data_folder}/processed_data/${object_name}/frames_1
@@ -31,4 +30,4 @@ jq -s '{
   frames: (.[0].frames + .[1].frames),
   aabb_scale: .[0].aabb_scale
 }' ${train_json_path} ${val_json_path} > ${merged_json_path}
-sed -i 's/undist\///g; s/\/00000000//g' ${merged_json_path}
+sed -i 's|undist/||g; s|/0000[0-9]\{4\}||g' ${merged_json_path}

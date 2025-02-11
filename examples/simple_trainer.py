@@ -15,6 +15,7 @@ import tqdm
 import tyro
 import viser
 import yaml
+import wandb
 from datasets.colmap import Dataset, Parser
 from datasets.traj import (
     generate_interpolated_path,
@@ -54,7 +55,7 @@ from jhutil.algorithm import knn as knn_jh
 from gesi.helper import load_points_and_anchor, save_points_and_anchor, make_simple_goal, rbf_weight, deform_point_cloud_arap, voxelize_pointcloud_and_get_means, linear_blend_skinning_knn, cluster_largest, get_target_indices, get_target_indices_drag, project_pointcloud_to_2d, deform_point_cloud_arap_2d
 from gesi.mini_pytorch3d import quaternion_multiply, quaternion_invert
 from jhutil import save_img, convert_to_gif
-from gesi.roma import get_drag_roma_tensor, match_two_image_roma
+from gesi.roma import get_drag_roma
 
 
 @dataclass
@@ -97,11 +98,11 @@ class Config:
     max_steps: int = 10000
     # Steps to evaluate the model
     eval_steps: List[int] = field(
-        default_factory=lambda: [3000, 4000, 5000, 6000, 7_000, 8000]
+        default_factory=lambda: [3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000]
     )
     # Steps to save the model
     save_steps: List[int] = field(
-        default_factory=lambda: [3000, 4000, 5000, 6000, 7_000, 8000]
+        default_factory=lambda: [3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000]
     )
 
     # Initialization strategy
@@ -150,7 +151,7 @@ class Config:
     # Enable camera optimization.
     pose_opt: bool = False
     # Learning rate for camera optimization
-    pose_opt_lr: float = 1e-5
+    pose_opt_lr: float = 0
     # Regularization for camera optimization as weight decay
     pose_opt_reg: float = 1e-6
     # Add noise to camera extrinsics. This is only to test the camera pose optimization.
@@ -187,6 +188,11 @@ class Config:
     single_finetune: bool = False
 
     finetuning_drot: bool = False
+    
+    wandb: bool = False
+    
+    exp_name: str = None
+    
     
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -469,6 +475,17 @@ class Runner:
                 render_fn=self._viewer_render_fn,
                 mode="training",
             )
+        
+        # Logger
+        if cfg.wandb:
+            wandb.init(
+                project="GESI",
+                group="tmp",
+                dir="./wandb",
+                name=cfg.exp_name,
+                settings=wandb.Settings(start_method="fork"),
+            )
+            
 
     def rasterize_splats(
         self,
@@ -881,12 +898,12 @@ class Runner:
         drag_iterations=500,
         rgb_iteration=500,
         coef_arap_drag=3e4,
-        coef_arap_rgb=1e-1,
+        coef_arap_rgb=1,
         coef_drag=1,
         lr=1e-2,
         is_eval=True,
-        save_image=False,
-    ):
+        save_image=True,
+    ) -> None:
         if is_eval:
             step = 0
             self.eval(step=step)
@@ -897,7 +914,7 @@ class Runner:
         
         with torch.no_grad():
             image_from, image_to = self.render_from_train_camera(return_rgba=True)
-            drag_from, drag_to = get_drag_roma_tensor(image_from, image_to)
+            drag_from, drag_to, bbox = get_drag_roma(image_from, image_to, return_bbox=True)
         
         drag_from = drag_from.to(self.device).to(torch.float32)
         drag_to = drag_to.to(self.device).to(torch.float32)
@@ -920,7 +937,7 @@ class Runner:
         ##########################################################
         ########### 2. initialize anchor and optimizer ###########
         ##########################################################
-        anchor = voxelize_pointcloud_and_get_means(points, 0.05)
+        anchor = voxelize_pointcloud_and_get_means(points, voxel_size=0.05)
 
         N = anchor.shape[0]
         q_init = torch.tensor([1, 0, 0, 0], dtype=torch.float32, device=self.device)
@@ -932,8 +949,8 @@ class Runner:
 
         anchor_optimizer = torch.optim.Adam(
             [
-                {"params": q, "lr": lr},  # Learning rate for R
-                {"params": t, "lr": lr},  # Learning rate for t (e.g., 10 times smaller)
+                {"params": q, "lr": lr},
+                {"params": t, "lr": lr},
             ]
         )
 
@@ -969,12 +986,15 @@ class Runner:
             if save_image:
                 with torch.no_grad():
                     image_from, image_to = self.render_from_train_camera()
-                image_from = image_from[:, 150:550, 350:750]
-                image_to = image_to[:, 150:550, 350:750]
+                
+                w_from, h_from, w_to, h_to = bbox
+                image_from = image_from[:, h_from:h_to, w_from:w_to]
+                image_to = image_to[:, h_from:h_to, w_from:w_to]
+                
                 image_concat = torch.cat([image_from.squeeze(), image_to.squeeze()], dim=1)
                 folder_path = "/data2/wlsgur4011/GESI/output_images/drag"
                 os.makedirs(folder_path, exist_ok=True)
-                save_img(image_concat, os.path.join(folder_path, f"drag_{i}.png"))
+                save_img(image_concat, os.path.join(folder_path, f"drag_{i:03}.png"))
                 if i == drag_iterations - 1:
                     convert_to_gif(folder_path)
         
@@ -1016,12 +1036,14 @@ class Runner:
         if save_image:
             with torch.no_grad():
                 image_from, image_to = self.render_from_train_camera()
-            image_from = image_from[:, 150:550, 350:750]
-            image_to = image_to[:, 150:550, 350:750]
+            
+            w_from, h_from, w_to, h_to = bbox
+            image_from = image_from[:, h_from:h_to, w_from:w_to]
+            image_to = image_to[:, h_from:h_to, w_from:w_to]
+                
             image_concat = torch.cat([image_from.squeeze(), image_to.squeeze()], dim=1)
             folder_path = "/data2/wlsgur4011/GESI/output_images/drag"
             os.makedirs(folder_path, exist_ok=True)
-            from jhutil import color_log; color_log(1111, os.path.join(folder_path, f"rgb.png"))
             save_img(image_concat, os.path.join(folder_path, f"rgb.png"))
     
     def train_drot(
@@ -1103,7 +1125,7 @@ class Runner:
                 image_concat = torch.cat([image_from.squeeze(), image_to.squeeze()], dim=1)
                 folder_path = "/data2/wlsgur4011/GESI/output_images/drot"
                 os.makedirs(folder_path, exist_ok=True)
-                save_img(image_concat, os.path.join(folder_path, f"drot_{i}.png"))
+                save_img(image_concat, os.path.join(folder_path, f"drot_{i:03}.png"))
                 if i == drot_iterations:
                     convert_to_gif(folder_path)
             
@@ -1276,6 +1298,7 @@ class Runner:
 
                 pixels_p = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
                 colors_p = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
+                torch.save((colors_p, pixels_p), f"/data2/wlsgur4011/GESI/tensors/psnr/{i:03}.pt")
                 metrics["psnr"].append(self.psnr(colors_p, pixels_p))
                 metrics["ssim"].append(self.ssim(colors_p, pixels_p))
                 metrics["lpips"].append(self.lpips(colors_p, pixels_p))
@@ -1294,11 +1317,18 @@ class Runner:
                     "num_GS": len(self.splats["means"]),
                 }
             )
+            from jhutil import color_log; color_log(0000, f"PSNR: {stats['psnr']:.3f}, SSIM: {stats['ssim']:.4f}, LPIPS: {stats['lpips']:.3f} ")
             print(
-                f"PSNR: {stats['psnr']:.3f}, SSIM: {stats['ssim']:.4f}, LPIPS: {stats['lpips']:.3f} "
                 f"Time: {stats['ellipse_time']:.3f}s/image "
                 f"Number of GS: {stats['num_GS']}"
             )
+            if wandb.run:
+                from jhutil import color_log; color_log(4444, step)
+                wandb.log({
+                    "psnr": stats['psnr'],
+                    "ssim": stats['ssim'],
+                    "lpips": stats['lpips'],
+                }, step=step)
             # save stats as json
             with open(f"{self.stats_dir}/{stage}_step{step:04d}.json", "w") as f:
                 json.dump(stats, f)
