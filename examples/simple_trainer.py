@@ -55,8 +55,11 @@ from jhutil.algorithm import knn as knn_jh
 from gesi.helper import load_points_and_anchor, save_points_and_anchor, make_simple_goal, rbf_weight, deform_point_cloud_arap, voxelize_pointcloud_and_get_means, linear_blend_skinning_knn, cluster_largest, get_target_indices, get_target_indices_drag, project_pointcloud_to_2d, deform_point_cloud_arap_2d
 from gesi.mini_pytorch3d import quaternion_multiply, quaternion_invert
 from jhutil import save_img, convert_to_gif
+from jhutil import get_img_diff, crop_images_from_backgournd
 from gesi.roma import get_drag_roma
-
+import warnings
+warnings.simplefilter("ignore")
+# warnings.filterwarnings("ignore", category=DeprecationWarning) # certain warning
 
 @dataclass
 class Config:
@@ -191,7 +194,9 @@ class Config:
     
     wandb: bool = False
     
-    exp_name: str = None
+    wandb_name: str = None
+    
+    wandb_group: str = None
     
     
     def adjust_steps(self, factor: float):
@@ -336,7 +341,6 @@ class Runner:
             test_every=cfg.test_every,
             no_colmap=cfg.no_colmap,
         )
-        from jhutil import color_log; color_log(1111, "init dataset")
         self.trainset = Dataset(
             self.parser,
             split="train",
@@ -352,7 +356,6 @@ class Runner:
 
         # Model
         feature_dim = 32 if cfg.app_opt else None
-        from jhutil import color_log; color_log(2222, "init gaussian & optimizer")
         self.splats, self.optimizers = create_splats_with_optimizers(
             self.parser,
             init_type=cfg.init_type,
@@ -480,9 +483,9 @@ class Runner:
         if cfg.wandb:
             wandb.init(
                 project="GESI",
-                group="tmp",
                 dir="./wandb",
-                name=cfg.exp_name,
+                group=cfg.wandb_group,
+                name=cfg.wandb_name,
                 settings=wandb.Settings(start_method="fork"),
             )
             
@@ -544,7 +547,6 @@ class Runner:
         return render_colors, render_alphas, info
 
     def train(self):
-        from jhutil import color_log; color_log(3333, "training starts")
         cfg = self.cfg
         device = self.device
         world_rank = self.world_rank
@@ -591,7 +593,6 @@ class Runner:
                 )
             )
 
-        from jhutil import color_log; color_log(4444, "init dataloader")
         trainloader = torch.utils.data.DataLoader(
             self.trainset,
             batch_size=cfg.batch_size,
@@ -642,9 +643,6 @@ class Runner:
             sh_degree_to_use = min(step // cfg.sh_degree_interval, cfg.sh_degree)
 
             # forward
-            if step % 1000 == 0:
-                from jhutil import color_log; color_log(5555, "render gaussian")
-                from jhutil import color_log; color_log(5666, "camtoworlds:", camtoworlds)
             renders, alphas, info = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
@@ -683,8 +681,6 @@ class Runner:
                 info=info,
             )
 
-            if step % 1000 == 0:
-                from jhutil import color_log; color_log(6666, "calc loss")
             # loss
             l1loss = F.l1_loss(colors, pixels)
             ssimloss = 1.0 - fused_ssim(
@@ -737,8 +733,6 @@ class Runner:
                     ).mean()
                 )
 
-            if step % 1000 == 0:
-                from jhutil import color_log; color_log(7777, "backprop")
             loss.backward()
 
             desc = f"loss={loss.item():.3f}| " f"sh degree={sh_degree_to_use}| "
@@ -830,8 +824,6 @@ class Runner:
                 else:
                     visibility_mask = (info["radii"] > 0).any(0)
 
-            if step % 1000 == 0:
-                from jhutil import color_log; color_log(8888, "optimize")
             # optimize
             for optimizer in self.optimizers.values():
                 if cfg.visible_adam:
@@ -911,10 +903,11 @@ class Runner:
         ##########################################################
         ################## 0. get drag via RoMa ##################
         ##########################################################
-        
+
+        from jhutil import color_log; color_log(1111, "get drag via RoMa")
         with torch.no_grad():
             image_from, image_to = self.render_from_train_camera(return_rgba=True)
-            drag_from, drag_to, bbox = get_drag_roma(image_from, image_to, return_bbox=True)
+            drag_from, drag_to, bbox, cycle_dist = get_drag_roma(image_from, image_to)
         
         drag_from = drag_from.to(self.device).to(torch.float32)
         drag_to = drag_to.to(self.device).to(torch.float32)
@@ -923,6 +916,7 @@ class Runner:
         ##########################################################
         ################ 1. get target using drag ################
         ##########################################################
+        from jhutil import color_log; color_log(2222, "get target using drag")
         points = self.splats.means.clone().detach()
         points.requires_grad = True
         
@@ -932,11 +926,15 @@ class Runner:
 
         target_indices = get_target_indices(means2d, depths)
         _, indices = knn_jh(means2d[target_indices], drag_from, k=1)
-        drag_to = drag_to[indices.squeeze()]
+        indices = indices.squeeze()
+        drag_to = drag_to[indices]
+        cycle_dist = cycle_dist[indices]
+        
         
         ##########################################################
         ########### 2. initialize anchor and optimizer ###########
         ##########################################################
+        from jhutil import color_log; color_log(3333, "initialize anchor and optimizer")
         anchor = voxelize_pointcloud_and_get_means(points, voxel_size=0.05)
 
         N = anchor.shape[0]
@@ -957,7 +955,7 @@ class Runner:
         ##########################################################
         #################### 3. drag optimize ####################
         ##########################################################
-        from jhutil import color_log; color_log("aaaa", "drag optimize start")
+        from jhutil import color_log; color_log(4444, "drag optimize ")
         with torch.no_grad():
             distances, indices_knn = knn_jh(anchor, anchor, k=5)
             weight = rbf_weight(distances, gamma=30)
@@ -975,7 +973,7 @@ class Runner:
             self.splats['quats'].data.copy_(quats_multiplied)
             
             means2d, _ = self.project_to_2d(points_lbs[target_indices])
-            loss_drag = drag_loss(means2d, drag_to)
+            loss_drag = drag_loss(means2d, drag_to, cycle_dist)
             
             loss = coef_arap_drag * loss_arap + coef_drag * loss_drag
 
@@ -1005,7 +1003,7 @@ class Runner:
         ##########################################################
         #################### 4. rgb optimize #####################
         ##########################################################
-        from jhutil import color_log; color_log("bbbb", "rgb optimize start")
+        from jhutil import color_log; color_log(4444, "rgb optimize")
         
         means_origin = self.splats['means'].clone().detach()
         quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
@@ -1262,6 +1260,7 @@ class Runner:
         )
         ellipse_time = 0
         metrics = defaultdict(list)
+        img_diff_list = []
         for i, data in enumerate(valloader):
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
@@ -1298,8 +1297,15 @@ class Runner:
 
                 pixels_p = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
                 colors_p = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
-                torch.save((colors_p, pixels_p), f"/data2/wlsgur4011/GESI/tensors/psnr/{i:03}.pt")
+                # torch.save((colors_p, pixels_p), f"/data2/wlsgur4011/GESI/tensors/psnr/{i:03}.pt")
                 metrics["psnr"].append(self.psnr(colors_p, pixels_p))
+                _, img1, img2 = crop_images_from_backgournd(colors_p[0], pixels_p[0])
+                img_diff_list.append(get_img_diff(img1, img2))
+                
+                if max(metrics["psnr"]) == metrics["psnr"][-1]:
+                    splat = {"step": step, "splats": self.splats.state_dict()}
+                    torch.save(splat, f"{self.ckpt_dir}/ckpt_best_psnr.pt")
+                    
                 metrics["ssim"].append(self.ssim(colors_p, pixels_p))
                 metrics["lpips"].append(self.lpips(colors_p, pixels_p))
                 if cfg.use_bilateral_grid:
@@ -1323,12 +1329,21 @@ class Runner:
                 f"Number of GS: {stats['num_GS']}"
             )
             if wandb.run:
-                from jhutil import color_log; color_log(4444, step)
-                wandb.log({
-                    "psnr": stats['psnr'],
-                    "ssim": stats['ssim'],
-                    "lpips": stats['lpips'],
-                }, step=step)
+                img_diffs = [
+                    wandb.Image(img_diff_list[0], caption="00"),
+                    wandb.Image(img_diff_list[5], caption="05"),
+                    wandb.Image(img_diff_list[10], caption="10")
+                ]
+                wandb.log(
+                    {
+                        "psnr": stats["psnr"],
+                        "ssim": stats["ssim"],
+                        "lpips": stats["lpips"],
+                        "img_diff": img_diffs
+                    },
+                    step=step,
+                    commit=True,
+                )
             # save stats as json
             with open(f"{self.stats_dir}/{stage}_step{step:04d}.json", "w") as f:
                 json.dump(stats, f)
