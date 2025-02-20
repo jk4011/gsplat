@@ -908,48 +908,45 @@ class Runner:
 
         from jhutil import color_log; color_log(1111, "get drag via RoMa")
         with torch.no_grad():
-            image_from, image_to = self.render_from_train_camera(return_rgba=True)
-            drag_from, drag_to, bbox = get_drag_roma(image_from, image_to)
+            image_source, image_target = self.render_from_train_camera(return_rgba=True)
+            drag_source, drag_target, bbox = get_drag_roma(image_source, image_target, device=self.device)
             
-            drag_from = drag_from.to(self.device)
-            drag_to = drag_to.to(self.device)
-        
             
         ##########################################################
         ################ 2. get target using drag ################
         ##########################################################
         from jhutil import color_log; color_log(2222, "get target using drag")
-        points = self.splats.means.clone().detach()
-        points.requires_grad = True
+        points_3d = self.splats.means.clone().detach()
+        points_3d.requires_grad = True
         
         # set drag
         with torch.no_grad():
-            points_2d, points_depth = self.project_to_2d(points)
+            points_2d, points_depth = self.project_to_2d(points_3d)
         
-        def get_valid_mask(points_2d, points_depth, drag_from, filter_distance):
+        def get_valid_mask(points_2d, points_depth, drag_source, filter_distance):
     
-            valid_points_mask = get_valid_mask_by_depth(points_2d, points_depth)
-            filtered_points_2d = points_2d[valid_points_mask]
+            points_mask = get_valid_mask_by_depth(points_2d, points_depth)
+            filtered_points_2d = points_2d[points_mask]
             
-            distances, nearest_indices = knn_jh(filtered_points_2d.detach(), drag_from.detach(), k=1)
+            distances, nearest_indices = knn_jh(filtered_points_2d.detach(), drag_source.detach(), k=1)
             
             distances = distances.squeeze()
             nearest_indices = nearest_indices.squeeze()
             
-            valid_points_mask[valid_points_mask == True] = distances < filter_distance
-            valid_drag_mask = nearest_indices[distances < filter_distance]
+            points_mask[points_mask == True] = distances < filter_distance
+            drag_mask = nearest_indices[distances < filter_distance]
             
-            return valid_points_mask, valid_drag_mask
+            return points_mask, drag_mask
         
-        valid_points_mask, valid_drag_mask = get_valid_mask(points_2d, points_depth, drag_from, filter_distance)
-        drag_to_filtered = drag_to[valid_drag_mask]
+        points_mask, drag_mask = get_valid_mask(points_2d, points_depth, drag_source, filter_distance)
+        drag_target_filtered = drag_target[drag_mask]
         
         
         ##########################################################
         ########### 3. initialize anchor and optimizer ###########
         ##########################################################
         from jhutil import color_log; color_log(3333, "initialize anchor and optimizer")
-        anchor = voxelize_pointcloud_and_get_means(points, voxel_size=0.05)
+        anchor = voxelize_pointcloud_and_get_means(points_3d, voxel_size=0.05)
 
         N = anchor.shape[0]
         q_init = torch.tensor([1, 0, 0, 0], dtype=torch.float32, device=self.device)
@@ -981,14 +978,14 @@ class Runner:
             
             loss_arap = arap_loss(anchor, anchor_translated, R, weight, indices_knn)
             
-            points_lbs, quats_lbs = linear_blend_skinning_knn(points, anchor, R, t)
-            quats_multiplied = quaternion_multiply(quats_lbs, quats_origin)
+            points_lbs, quats_lbs = linear_blend_skinning_knn(points_3d, anchor, R, t)
+            updated_quaternions = quaternion_multiply(quats_lbs, quats_origin)
             self.splats['means'].data.copy_(points_lbs)
-            self.splats['quats'].data.copy_(quats_multiplied)
+            self.splats['quats'].data.copy_(updated_quaternions)
             
-            points_lbs_filtered = points_lbs[valid_points_mask]
+            points_lbs_filtered = points_lbs[points_mask]
             points_lbs_filtered_2d, _ = self.project_to_2d(points_lbs_filtered)
-            loss_drag = drag_loss(points_lbs_filtered_2d, drag_to_filtered)
+            loss_drag = drag_loss(points_lbs_filtered_2d, drag_target_filtered)
             
             loss = coef_arap_drag * loss_arap + coef_drag * loss_drag
             
@@ -1001,13 +998,13 @@ class Runner:
                 
             if save_image:
                 with torch.no_grad():
-                    image_from, image_to = self.render_from_train_camera()
+                    image_source, image_target = self.render_from_train_camera()
                 
                 w_from, h_from, w_to, h_to = bbox
-                image_from = image_from[:, h_from:h_to, w_from:w_to]
-                image_to = image_to[:, h_from:h_to, w_from:w_to]
+                image_source = image_source[:, h_from:h_to, w_from:w_to]
+                image_target = image_target[:, h_from:h_to, w_from:w_to]
                 
-                image_concat = torch.cat([image_from.squeeze(), image_to.squeeze()], dim=1)
+                image_concat = torch.cat([image_source.squeeze(), image_target.squeeze()], dim=1)
                 folder_path = "/data2/wlsgur4011/GESI/output_images/drag"
                 os.makedirs(folder_path, exist_ok=True)
                 save_img(image_concat, os.path.join(folder_path, f"drag_{i:03}.png"))
@@ -1055,13 +1052,13 @@ class Runner:
     
         if save_image:
             with torch.no_grad():
-                image_from, image_to = self.render_from_train_camera()
+                image_source, image_target = self.render_from_train_camera()
             
             w_from, h_from, w_to, h_to = bbox
-            image_from = image_from[:, h_from:h_to, w_from:w_to]
-            image_to = image_to[:, h_from:h_to, w_from:w_to]
+            image_source = image_source[:, h_from:h_to, w_from:w_to]
+            image_target = image_target[:, h_from:h_to, w_from:w_to]
                 
-            image_concat = torch.cat([image_from.squeeze(), image_to.squeeze()], dim=1)
+            image_concat = torch.cat([image_source.squeeze(), image_target.squeeze()], dim=1)
             folder_path = "/data2/wlsgur4011/GESI/output_images/drag"
             os.makedirs(folder_path, exist_ok=True)
             save_img(image_concat, os.path.join(folder_path, f"rgb.png"))
