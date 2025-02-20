@@ -11,7 +11,7 @@ import nerfview
 import numpy as np
 import torch
 import torch.nn.functional as F
-import tqdm
+from tqdm import tqdm
 import tyro
 import viser
 import yaml
@@ -55,7 +55,7 @@ from jhutil.algorithm import knn as knn_jh
 from gesi.helper import load_points_and_anchor, save_points_and_anchor, make_simple_goal, rbf_weight, deform_point_cloud_arap, voxelize_pointcloud_and_get_means, linear_blend_skinning_knn, cluster_largest, get_target_indices, get_target_indices_drag, project_pointcloud_to_2d, deform_point_cloud_arap_2d
 from gesi.mini_pytorch3d import quaternion_multiply, quaternion_invert
 from jhutil import save_img, convert_to_gif
-from jhutil import get_img_diff, crop_images_from_backgournd
+from jhutil import get_img_diff, crop_two_image_with_background
 from gesi.roma import get_drag_roma
 import warnings
 warnings.simplefilter("ignore")
@@ -605,7 +605,7 @@ class Runner:
 
         # Training loop.
         global_tic = time.time()
-        pbar = tqdm.tqdm(range(init_step, max_steps))
+        pbar = tqdm(range(init_step, max_steps))
         for step in pbar:
             if not cfg.disable_viewer:
                 while self.viewer.state.status == "paused":
@@ -894,27 +894,28 @@ class Runner:
         coef_drag=1,
         lr=1e-2,
         is_eval=True,
-        save_image=True,
+        save_image=False,
+        rgb_optimize=False,
     ) -> None:
         if is_eval:
             step = 0
             self.eval(step=step)
         
         ##########################################################
-        ################## 0. get drag via RoMa ##################
+        ################## 1. get drag via RoMa ##################
         ##########################################################
 
         from jhutil import color_log; color_log(1111, "get drag via RoMa")
         with torch.no_grad():
             image_from, image_to = self.render_from_train_camera(return_rgba=True)
-            drag_from, drag_to, bbox, cycle_dist = get_drag_roma(image_from, image_to)
-        
+            drag_from, drag_to, bbox = get_drag_roma(image_from, image_to)
+            
         drag_from = drag_from.to(self.device).to(torch.float32)
         drag_to = drag_to.to(self.device).to(torch.float32)
         
             
         ##########################################################
-        ################ 1. get target using drag ################
+        ################ 2. get target using drag ################
         ##########################################################
         from jhutil import color_log; color_log(2222, "get target using drag")
         points = self.splats.means.clone().detach()
@@ -922,17 +923,17 @@ class Runner:
         
         # set drag
         with torch.no_grad():
-            means2d, depths = self.project_to_2d(points)
+            points2d, points_depth = self.project_to_2d(points)
 
-        target_indices = get_target_indices(means2d, depths)
-        _, indices = knn_jh(means2d[target_indices], drag_from, k=1)
-        indices = indices.squeeze()
-        drag_to = drag_to[indices]
-        cycle_dist = cycle_dist[indices]
+        # TODO: will change by using alpha, since knn with k=100 is too slow
+        indice_point = get_target_indices(points2d, points_depth)
+        _, indice_drag = knn_jh(points2d[indice_point], drag_from, k=1)
+        indice_drag = indice_drag.squeeze()
+        drag_to_sparse = drag_to[indice_drag]
         
         
         ##########################################################
-        ########### 2. initialize anchor and optimizer ###########
+        ########### 3. initialize anchor and optimizer ###########
         ##########################################################
         from jhutil import color_log; color_log(3333, "initialize anchor and optimizer")
         anchor = voxelize_pointcloud_and_get_means(points, voxel_size=0.05)
@@ -953,7 +954,7 @@ class Runner:
         )
 
         ##########################################################
-        #################### 3. drag optimize ####################
+        #################### 4. drag optimize ####################
         ##########################################################
         from jhutil import color_log; color_log(4444, "drag optimize ")
         with torch.no_grad():
@@ -961,7 +962,7 @@ class Runner:
             weight = rbf_weight(distances, gamma=30)
         quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
         
-        for i in range(drag_iterations):
+        for i in tqdm(range(drag_iterations)):
             R = quaternion_to_matrix(F.normalize(q, dim=-1)).squeeze()  # (N, 3, 3)
             anchor_translated = anchor + t  # (N, 3)
             
@@ -972,15 +973,19 @@ class Runner:
             self.splats['means'].data.copy_(points_lbs)
             self.splats['quats'].data.copy_(quats_multiplied)
             
-            means2d, _ = self.project_to_2d(points_lbs[target_indices])
-            loss_drag = drag_loss(means2d, drag_to, cycle_dist)
+            points_sparse = points_lbs[indice_point]
+            drag_from_lbs, _ = self.project_to_2d(points_sparse)
+            loss_drag = drag_loss(drag_from_lbs, drag_to_sparse)
             
             loss = coef_arap_drag * loss_arap + coef_drag * loss_drag
-
+            
             loss.backward(retain_graph=True)
             anchor_optimizer.step()
             anchor_optimizer.zero_grad()
             
+            if wandb.run:
+                wandb.log({"loss_arap": loss_arap, "loss_drag": loss_drag}, step=i)
+                
             if save_image:
                 with torch.no_grad():
                     image_from, image_to = self.render_from_train_camera()
@@ -1003,6 +1008,9 @@ class Runner:
         ##########################################################
         #################### 4. rgb optimize #####################
         ##########################################################
+        if not rgb_optimize:
+            return
+
         from jhutil import color_log; color_log(4444, "rgb optimize")
         
         means_origin = self.splats['means'].clone().detach()
@@ -1012,7 +1020,7 @@ class Runner:
             distances, indices_knn = knn_jh(means_origin, means_origin, k=5)
             weight = rbf_weight(distances, gamma=30)
 
-        for i in range(rgb_iteration):
+        for i in tqdm(range(rgb_iteration)):
             quats_current = F.normalize(self.splats['quats'], dim=-1)
             q = quaternion_multiply(quats_current, quats_origin_invert)
             R = quaternion_to_matrix(q).squeeze()  # (N, 3, 3)
@@ -1299,7 +1307,7 @@ class Runner:
                 colors_p = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
                 # torch.save((colors_p, pixels_p), f"/data2/wlsgur4011/GESI/tensors/psnr/{i:03}.pt")
                 metrics["psnr"].append(self.psnr(colors_p, pixels_p))
-                _, img1, img2 = crop_images_from_backgournd(colors_p[0], pixels_p[0])
+                _, img1, img2 = crop_two_image_with_background(colors_p[0], pixels_p[0])
                 img_diff_list.append(get_img_diff(img1, img2))
                 
                 if max(metrics["psnr"]) == metrics["psnr"][-1]:
@@ -1398,7 +1406,7 @@ class Runner:
         video_dir = f"{cfg.result_dir}/videos"
         os.makedirs(video_dir, exist_ok=True)
         writer = imageio.get_writer(f"{video_dir}/traj_{step}.mp4", fps=30)
-        for i in tqdm.trange(len(camtoworlds_all), desc="Rendering trajectory"):
+        for i in tqdm(range(len(camtoworlds_all)), desc="Rendering trajectory"):
             camtoworlds = camtoworlds_all[i : i + 1]
             Ks = K[None]
 

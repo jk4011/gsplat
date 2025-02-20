@@ -23,7 +23,7 @@ bash scripts/finetuning_drag.sh 4 tornado 0000 0456
 
 bash scripts/finetuning_drag.sh 5 trex 0100 0300 && \
 bash scripts/finetuning_drag.sh 5 truck 0078 0171 && \
-bash scripts/finetuning_drag.sh 5 wall_e 0222 0285
+bash scripts/finetuning_drag.sh 5 wall_e 0222 0285 
 
 bash scripts/finetuning_drag.sh 0 wolf 0000 2393 && \
 bash scripts/finetuning_drag.sh 0 world_globe 0387 0483

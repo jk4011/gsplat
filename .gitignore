@@ -125,3 +125,17 @@ data
 results
 
 !examples/benchmarks/compression/results/
+
+.vscode
+*.pyc
+*.zip
+splits
+images/
+*.pth
+*.pkl
+train/
+val/
+wandb/
+tmp*
+temp*
+__pycache__
