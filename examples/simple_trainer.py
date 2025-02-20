@@ -52,7 +52,7 @@ import torch.nn as nn
 from gesi.loss import arap_loss, drag_loss, drot_loss
 from gesi.mini_pytorch3d import quaternion_to_matrix
 from jhutil.algorithm import knn as knn_jh
-from gesi.helper import load_points_and_anchor, save_points_and_anchor, make_simple_goal, rbf_weight, deform_point_cloud_arap, voxelize_pointcloud_and_get_means, linear_blend_skinning_knn, cluster_largest, get_target_indices, get_target_indices_drag, project_pointcloud_to_2d, deform_point_cloud_arap_2d
+from gesi.helper import load_points_and_anchor, save_points_and_anchor, make_simple_goal, rbf_weight, deform_point_cloud_arap, voxelize_pointcloud_and_get_means, linear_blend_skinning_knn, cluster_largest, get_valid_mask_by_depth, get_target_indices_drag, project_pointcloud_to_2d, deform_point_cloud_arap_2d
 from gesi.mini_pytorch3d import quaternion_multiply, quaternion_invert
 from jhutil import save_img, convert_to_gif
 from jhutil import get_img_diff, crop_two_image_with_background
@@ -889,6 +889,7 @@ class Runner:
         self,
         drag_iterations=500,
         rgb_iteration=500,
+        filter_distance=1,
         coef_arap_drag=3e4,
         coef_arap_rgb=1,
         coef_drag=1,
@@ -910,8 +911,8 @@ class Runner:
             image_from, image_to = self.render_from_train_camera(return_rgba=True)
             drag_from, drag_to, bbox = get_drag_roma(image_from, image_to)
             
-        drag_from = drag_from.to(self.device).to(torch.float32)
-        drag_to = drag_to.to(self.device).to(torch.float32)
+            drag_from = drag_from.to(self.device)
+            drag_to = drag_to.to(self.device)
         
             
         ##########################################################
@@ -923,13 +924,25 @@ class Runner:
         
         # set drag
         with torch.no_grad():
-            points2d, points_depth = self.project_to_2d(points)
-
-        # TODO: will change by using alpha, since knn with k=100 is too slow
-        indice_point = get_target_indices(points2d, points_depth)
-        _, indice_drag = knn_jh(points2d[indice_point], drag_from, k=1)
-        indice_drag = indice_drag.squeeze()
-        drag_to_sparse = drag_to[indice_drag]
+            points_2d, points_depth = self.project_to_2d(points)
+        
+        def get_valid_mask(points_2d, points_depth, drag_from, filter_distance):
+    
+            valid_points_mask = get_valid_mask_by_depth(points_2d, points_depth)
+            filtered_points_2d = points_2d[valid_points_mask]
+            
+            distances, nearest_indices = knn_jh(filtered_points_2d.detach(), drag_from.detach(), k=1)
+            
+            distances = distances.squeeze()
+            nearest_indices = nearest_indices.squeeze()
+            
+            valid_points_mask[valid_points_mask == True] = distances < filter_distance
+            valid_drag_mask = nearest_indices[distances < filter_distance]
+            
+            return valid_points_mask, valid_drag_mask
+        
+        valid_points_mask, valid_drag_mask = get_valid_mask(points_2d, points_depth, drag_from, filter_distance)
+        drag_to_filtered = drag_to[valid_drag_mask]
         
         
         ##########################################################
@@ -973,9 +986,9 @@ class Runner:
             self.splats['means'].data.copy_(points_lbs)
             self.splats['quats'].data.copy_(quats_multiplied)
             
-            points_sparse = points_lbs[indice_point]
-            drag_from_lbs, _ = self.project_to_2d(points_sparse)
-            loss_drag = drag_loss(drag_from_lbs, drag_to_sparse)
+            points_lbs_filtered = points_lbs[valid_points_mask]
+            points_lbs_filtered_2d, _ = self.project_to_2d(points_lbs_filtered)
+            loss_drag = drag_loss(points_lbs_filtered_2d, drag_to_filtered)
             
             loss = coef_arap_drag * loss_arap + coef_drag * loss_drag
             
@@ -1013,18 +1026,19 @@ class Runner:
 
         from jhutil import color_log; color_log(4444, "rgb optimize")
         
-        means_origin = self.splats['means'].clone().detach()
+        points_origin = self.splats['means'].clone().detach()
         quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
         quats_origin_invert = quaternion_invert(quats_origin)
         with torch.no_grad():
-            distances, indices_knn = knn_jh(means_origin, means_origin, k=5)
+            distances, indices_knn = knn_jh(points_origin, points_origin, k=5)
             weight = rbf_weight(distances, gamma=30)
 
         for i in tqdm(range(rgb_iteration)):
             quats_current = F.normalize(self.splats['quats'], dim=-1)
             q = quaternion_multiply(quats_current, quats_origin_invert)
             R = quaternion_to_matrix(q).squeeze()  # (N, 3, 3)
-            loss_arap = arap_loss(means_origin, self.splats['means'], R, weight, indices_knn)
+            points_now = self.splats['means']
+            loss_arap = arap_loss(points_origin, points_now, R, weight, indices_knn)
             loss_rgb = self.render_and_calc_rgb_loss()
             
             loss = coef_arap_rgb * loss_arap + loss_rgb
@@ -1051,137 +1065,6 @@ class Runner:
             folder_path = "/data2/wlsgur4011/GESI/output_images/drag"
             os.makedirs(folder_path, exist_ok=True)
             save_img(image_concat, os.path.join(folder_path, f"rgb.png"))
-    
-    def train_drot(
-        self,
-        drot_iterations=300,
-        rgb_iteration=500,
-        coef_arap_drag=1e5,
-        coef_arap_rgb=1e2,
-        coef_drot=1,
-        lr_anchor=1e-2,
-        is_eval=True,
-        crop_image=True,
-        save_image=False,
-    ):
-        if is_eval:
-            step = 0
-            self.eval(step=step)
-            
-        points = self.splats.means.clone().detach()
-        points.requires_grad = False
-
-        ##########################################################
-        ########### 1. initialize anchor and optimizer ###########
-        ##########################################################
-        anchor = voxelize_pointcloud_and_get_means(points, 0.05)
-
-        N = anchor.shape[0]
-        q_init = torch.tensor([1, 0, 0, 0], dtype=torch.float32, device=self.device)
-        q_init = q_init.unsqueeze(0).repeat(N, 1, 1)
-        t_init = torch.zeros((N, 3), dtype=torch.float32, device=self.device)
-
-        q = nn.Parameter(q_init)  # (N, 3, 3)
-        t = nn.Parameter(t_init)  # (N, 3)
-
-        anchor_optimizer = torch.optim.Adam(
-            [
-                {"params": q, "lr": lr_anchor},  # Learning rate for R
-                {"params": t, "lr": lr_anchor},  # Learning rate for t (e.g., 10 times smaller)
-            ]
-        )
-
-        with torch.no_grad():
-            distances, indices_knn = knn_jh(anchor, anchor, k=5)
-            weight = rbf_weight(distances, gamma=30)
-            
-        quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
-        
-        from jhutil import color_log; color_log("aaaa", "drot optimize start")
-        
-        for i in range(drot_iterations + 1):
-            ##########################################################
-            ###################### 2. arap loss ######################
-            ##########################################################
-            R = quaternion_to_matrix(F.normalize(q, dim=-1)).squeeze()  # (N, 3, 3)
-            anchor_translated = anchor + t  # (N, 3)
-            
-            loss_arap = arap_loss(anchor, anchor_translated, R, weight, indices_knn)
-            
-            points_lbs, quats_lbs = linear_blend_skinning_knn(points, anchor, R, t)
-            quats_multiplied = quaternion_multiply(quats_lbs, quats_origin)
-            
-            self.splats['means'].data.copy_(points_lbs)
-            self.splats['quats'].data.copy_(quats_multiplied)
-            
-            means2d, depths = self.project_to_2d(points_lbs)
-            target_indices = get_target_indices(means2d, depths)
-            means2d_target = means2d[target_indices]
-            
-            with torch.no_grad():
-                image_from, image_to = self.render_from_train_camera()
-            
-            if crop_image:
-                # TODO: crop image using black background
-                image_from = image_from[:, 150:550, 350:750]
-                image_to = image_to[:, 150:550, 350:750]
-                means2d_target[:, 0] = (means2d_target[:, 0] - 350)
-                means2d_target[:, 1] = (means2d_target[:, 1] - 150)
-            if save_image:
-                image_concat = torch.cat([image_from.squeeze(), image_to.squeeze()], dim=1)
-                folder_path = "/data2/wlsgur4011/GESI/output_images/drot"
-                os.makedirs(folder_path, exist_ok=True)
-                save_img(image_concat, os.path.join(folder_path, f"drot_{i:03}.png"))
-                if i == drot_iterations:
-                    convert_to_gif(folder_path)
-            
-            loss_drot = drot_loss(image_from, image_to, means2d_target)
-            
-            loss = coef_arap_drag * loss_arap + coef_drot * loss_drot
-
-            loss.backward()
-            anchor_optimizer.step()
-            anchor_optimizer.zero_grad()
-        
-            print(f"Step [{i}] - Arap loss: {loss_arap.item():.6f}   Drot loss: {loss_drot.item():.6f}")
-            
-            if i % 20 == 0:
-                coef_arap_drag *= 0.8
-
-        if is_eval:
-            step += drot_iterations
-            self.eval(step=step)
-        
-        ##########################################################
-        #################### 4. rgb optimize #####################
-        ##########################################################
-        from jhutil import color_log; color_log("bbbb", "rgb optimize start")
-        
-        means_origin = self.splats['means'].clone().detach()
-        quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
-        quats_origin_invert = quaternion_invert(quats_origin)
-        with torch.no_grad():
-            distances, indices_knn = knn_jh(means_origin, means_origin, k=5)
-            weight = rbf_weight(distances, gamma=30)
-
-        for i in range(rgb_iteration):
-            quats_current = F.normalize(self.splats['quats'], dim=-1)
-            q = quaternion_multiply(quats_current, quats_origin_invert)
-            R = quaternion_to_matrix(q).squeeze()  # (N, 3, 3)
-            loss_arap = arap_loss(means_origin, self.splats['means'], R, weight, indices_knn)
-            loss_rgb = self.render_and_calc_rgb_loss()
-            
-            loss = coef_arap_rgb * loss_arap + loss_rgb
-            loss.backward()
-            
-            for var_name in ['means', 'quats']:
-                optimizer = self.optimizers[var_name]
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
-
-        if is_eval:
-            step += rgb_iteration
-            self.eval(step=step)
     
     
     def project_to_2d(self, points):
