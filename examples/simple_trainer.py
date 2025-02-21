@@ -42,6 +42,7 @@ from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 # from gsplat.optimizers import SelectiveAdam
+from einops import rearrange
 
 import sys
 
@@ -54,8 +55,8 @@ from gesi.mini_pytorch3d import quaternion_to_matrix
 from jhutil.algorithm import knn as knn_jh
 from gesi.helper import load_points_and_anchor, save_points_and_anchor, make_simple_goal, rbf_weight, deform_point_cloud_arap, voxelize_pointcloud_and_get_means, linear_blend_skinning_knn, cluster_largest, get_valid_mask_by_depth, get_target_indices_drag, project_pointcloud_to_2d, deform_point_cloud_arap_2d
 from gesi.mini_pytorch3d import quaternion_multiply, quaternion_invert
-from jhutil import save_img, convert_to_gif
-from jhutil import get_img_diff, crop_two_image_with_background
+from jhutil import save_img, convert_to_gif, show_matching
+from jhutil import get_img_diff, crop_two_image_with_background, crop_two_image_with_alpha
 from gesi.roma import get_drag_roma
 import warnings
 warnings.simplefilter("ignore")
@@ -908,7 +909,7 @@ class Runner:
 
         from jhutil import color_log; color_log(1111, "get drag via RoMa")
         with torch.no_grad():
-            image_source, image_target = self.render_from_train_camera(return_rgba=True)
+            image_source, image_target = self.fetch_comparable_two_image(return_rgba=True)
             drag_source, drag_target, bbox = get_drag_roma(image_source, image_target, device=self.device)
             
             
@@ -940,6 +941,16 @@ class Runner:
         
         points_mask, drag_mask = get_valid_mask(points_2d, points_depth, drag_source, filter_distance)
         drag_target_filtered = drag_target[drag_mask]
+        
+        if wandb.run:
+            n_drag = len(drag_source)
+            n_pts = 5000
+            
+            img1 = rearrange(image_source[0], 'h w c -> c h w')
+            img2 = rearrange(image_target[0], 'h w c -> c h w')
+            
+            matching_image = show_matching(img1[:3], img2[:3], drag_source[::n_drag//n_pts], drag_target[::n_drag//n_pts], bbox=bbox, skip_line=True, return_image=True)
+            wandb.log({"matching": wandb.Image(matching_image, caption="matching_image"),}, commit=True)
         
         
         ##########################################################
@@ -996,9 +1007,15 @@ class Runner:
             if wandb.run:
                 wandb.log({"loss_arap": loss_arap, "loss_drag": loss_drag}, step=i)
                 
+                if i % 100 == 0:
+                    image_source, image_target = self.fetch_comparable_two_image(return_rgba=True, return_shape='chw')
+                    _, img1, img2 = crop_two_image_with_alpha(image_source, image_target)
+                    diff_img = get_img_diff(img1[:3], img2[:3])
+                    wandb.log({"train_img_diff": wandb.Image(diff_img, caption="train_img_diff")}, step=i, commit=True)
+                
             if save_image:
                 with torch.no_grad():
-                    image_source, image_target = self.render_from_train_camera()
+                    image_source, image_target = self.fetch_comparable_two_image()
                 
                 w_from, h_from, w_to, h_to = bbox
                 image_source = image_source[:, h_from:h_to, w_from:w_to]
@@ -1021,7 +1038,7 @@ class Runner:
         if not rgb_optimize:
             return
 
-        from jhutil import color_log; color_log(4444, "rgb optimize")
+        from jhutil import color_log; color_log(5555, "rgb optimize")
         
         points_origin = self.splats['means'].clone().detach()
         quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
@@ -1052,7 +1069,7 @@ class Runner:
     
         if save_image:
             with torch.no_grad():
-                image_source, image_target = self.render_from_train_camera()
+                image_source, image_target = self.fetch_comparable_two_image()
             
             w_from, h_from, w_to, h_to = bbox
             image_source = image_source[:, h_from:h_to, w_from:w_to]
@@ -1083,7 +1100,7 @@ class Runner:
         means2d, depth = project_pointcloud_to_2d(points, camtoworlds, Ks)
         return means2d, depth
     
-    def render_from_train_camera(self, return_rgba=False):
+    def fetch_comparable_two_image(self, return_rgba=False, return_shape='bhwc'):
         
         if not hasattr(self, "data"):
             trainloader = torch.utils.data.DataLoader(
@@ -1122,11 +1139,19 @@ class Runner:
             renders = torch.concat([renders, alphas], dim=-1)
             gt_images = torch.concat([gt_images, gt_alphas], dim=-1)
         
+        if return_shape == 'bhwc':
+            pass
+        elif return_shape == 'chw':
+            renders = renders[0].permute(2, 0, 1)
+            gt_images = gt_images[0].permute(2, 0, 1)
+        else:
+            raise ValueError(f"Invalid shape: {return_shape}")
+        
         return renders, gt_images
     
     
     def render_and_calc_rgb_loss(self):
-        renders, gt_images = self.render_from_train_camera()
+        renders, gt_images = self.fetch_comparable_two_image()
         if renders.shape[-1] == 4:
             colors, depths = renders[..., 0:3], renders[..., 3:4]
         else:
