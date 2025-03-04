@@ -53,14 +53,16 @@ import torch.nn as nn
 from gesi.loss import arap_loss, drag_loss, drot_loss
 from gesi.mini_pytorch3d import quaternion_to_matrix
 from jhutil.algorithm import knn as knn_jh
-from gesi.helper import load_points_and_anchor, save_points_and_anchor, make_simple_goal, rbf_weight, deform_point_cloud_arap, voxelize_pointcloud_and_get_means, linear_blend_skinning_knn, cluster_largest, get_valid_mask_by_depth, get_target_indices_drag, project_pointcloud_to_2d, deform_point_cloud_arap_2d
+from gesi.helper import load_points_and_anchor, save_points_and_anchor, make_simple_goal, rbf_weight, deform_point_cloud_arap, voxelize_pointcloud_and_get_means, linear_blend_skinning_knn, cluster_largest, get_visible_mask_by_depth, get_target_indices_drag, project_pointcloud_to_2d, deform_point_cloud_arap_2d
 from gesi.mini_pytorch3d import quaternion_multiply, quaternion_invert
 from jhutil import save_img, convert_to_gif, show_matching
 from jhutil import get_img_diff, crop_two_image_with_background, crop_two_image_with_alpha
 from gesi.roma import get_drag_roma
 import warnings
+import torch_fpsample
 warnings.simplefilter("ignore")
 # warnings.filterwarnings("ignore", category=DeprecationWarning) # certain warning
+
 
 @dataclass
 class Config:
@@ -911,7 +913,8 @@ class Runner:
         with torch.no_grad():
             image_source, image_target = self.fetch_comparable_two_image(return_rgba=True)
             drag_source, drag_target, bbox = get_drag_roma(image_source, image_target, device=self.device)
-            
+            H = image_source.shape[1]
+            W = image_source.shape[2]
             
         ##########################################################
         ################ 2. get target using drag ################
@@ -923,10 +926,10 @@ class Runner:
         # set drag
         with torch.no_grad():
             points_2d, points_depth = self.project_to_2d(points_3d)
-        
-        def get_valid_mask(points_2d, points_depth, drag_source, filter_distance):
+            
+        def get_drag_mask(points_2d, points_depth, drag_source, filter_distance):
     
-            points_mask = get_valid_mask_by_depth(points_2d, points_depth)
+            points_mask = get_visible_mask_by_depth(points_2d, points_depth, H, W)
             filtered_points_2d = points_2d[points_mask]
             
             distances, nearest_indices = knn_jh(filtered_points_2d.detach(), drag_source.detach(), k=1)
@@ -939,7 +942,7 @@ class Runner:
             
             return points_mask, drag_mask
         
-        points_mask, drag_mask = get_valid_mask(points_2d, points_depth, drag_source, filter_distance)
+        points_mask, drag_mask = get_drag_mask(points_2d, points_depth, drag_source, filter_distance)
         drag_target_filtered = drag_target[drag_mask]
         
         if wandb.run:
@@ -949,7 +952,7 @@ class Runner:
             img1 = rearrange(image_source[0], 'h w c -> c h w')
             img2 = rearrange(image_target[0], 'h w c -> c h w')
             
-            matching_image = show_matching(img1[:3], img2[:3], drag_source[::n_drag//n_pts], drag_target[::n_drag//n_pts], bbox=bbox, skip_line=True, return_image=True)
+            matching_image = show_matching(img1[:3], img2[:3], drag_source[::n_drag//n_pts], drag_target[::n_drag//n_pts], bbox=bbox, skip_line=True)
             wandb.log({"matching": wandb.Image(matching_image, caption="matching_image"),}, commit=True)
         
         
@@ -957,7 +960,16 @@ class Runner:
         ########### 3. initialize anchor and optimizer ###########
         ##########################################################
         from jhutil import color_log; color_log(3333, "initialize anchor and optimizer")
-        anchor = voxelize_pointcloud_and_get_means(points_3d, voxel_size=0.05)
+        
+        # anchor = voxelize_pointcloud_and_get_means(points_3d, voxel_size=0.05)
+        anchor, indice = torch_fpsample.sample(points_3d.cpu(), 500)
+        
+        anchor = anchor.to(self.device)
+        
+        # data_all = [anchor, drag_target_filtered, points_2d, drag_target, drag_source, image_target, image_source, points_3d, self.data["K"]]
+        # data_name = "penguin"
+        # torch.save(data_all, f"/tmp/.cache/data_all_{data_name}.pt")
+        # data_all = torch.load(f"/tmp/.cache/data_all_{data_name}.pt")
 
         N = anchor.shape[0]
         q_init = torch.tensor([1, 0, 0, 0], dtype=torch.float32, device=self.device)
@@ -1033,7 +1045,7 @@ class Runner:
             self.eval(step=step)
         
         ##########################################################
-        #################### 4. rgb optimize #####################
+        #################### 5. rgb optimize #####################
         ##########################################################
         if not rgb_optimize:
             return
@@ -1123,6 +1135,10 @@ class Runner:
         masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
         height, width = gt_images.shape[1:3]
 
+        # TODO: render splats in all training images
+        
+        
+        
         renders, alphas, info = self.rasterize_splats(
             camtoworlds=camtoworlds,
             Ks=Ks,
@@ -1135,6 +1151,9 @@ class Runner:
             render_mode="RGB+ED" if cfg.depth_loss else "RGB",
             masks=masks,
         )
+        # TODO: get max matching images
+        
+        
         if return_rgba:
             renders = torch.concat([renders, alphas], dim=-1)
             gt_images = torch.concat([gt_images, gt_alphas], dim=-1)
