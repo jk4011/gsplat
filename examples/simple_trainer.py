@@ -50,7 +50,7 @@ sys.path.append("/data2/wlsgur4011/GESI/")
 sys.path.append("/data2/wlsgur4011/GESI/RoMa")
 
 import torch.nn as nn
-from gesi.loss import arap_loss, drag_loss, drot_loss
+from gesi.loss import arap_loss, drag_loss, drot_loss, arap_loss_grouped
 from gesi.mini_pytorch3d import quaternion_to_matrix
 from jhutil.algorithm import knn as knn_jh
 from gesi.helper import load_points_and_anchor, save_points_and_anchor, make_simple_goal, rbf_weight, deform_point_cloud_arap, voxelize_pointcloud_and_get_means, linear_blend_skinning_knn, cluster_largest, get_visible_mask_by_depth, get_target_indices_drag, project_pointcloud_to_2d, deform_point_cloud_arap_2d
@@ -60,6 +60,8 @@ from jhutil import get_img_diff, crop_two_image_with_background, crop_two_image_
 from gesi.roma import get_drag_roma
 import warnings
 import torch_fpsample
+from gesi.rigid_grouping import local_rigid_grouping
+
 warnings.simplefilter("ignore")
 # warnings.filterwarnings("ignore", category=DeprecationWarning) # certain warning
 
@@ -197,10 +199,11 @@ class Config:
     
     wandb: bool = False
     
-    wandb_name: str = None
+    object_name: str = None
     
     wandb_group: str = None
     
+    wandb_sweep: bool = False
     
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -482,15 +485,7 @@ class Runner:
                 mode="training",
             )
         
-        # Logger
-        if cfg.wandb:
-            wandb.init(
-                project="GESI",
-                dir="./wandb",
-                group=cfg.wandb_group,
-                name=cfg.wandb_name,
-                settings=wandb.Settings(start_method="fork"),
-            )
+        self.hyperparam = wandb.config
             
 
     def rasterize_splats(
@@ -943,6 +938,7 @@ class Runner:
             return points_mask, drag_mask
         
         points_mask, drag_mask = get_drag_mask(points_2d, points_depth, drag_source, filter_distance)
+        points_3d_filtered = points_3d[points_mask]
         drag_target_filtered = drag_target[drag_mask]
         
         if wandb.run:
@@ -962,14 +958,13 @@ class Runner:
         from jhutil import color_log; color_log(3333, "initialize anchor and optimizer")
         
         # anchor = voxelize_pointcloud_and_get_means(points_3d, voxel_size=0.05)
-        anchor, indice = torch_fpsample.sample(points_3d.cpu(), 500)
+        anchor, anchor_indice = torch_fpsample.sample(points_3d.cpu(), 500)
         
         anchor = anchor.to(self.device)
         
-        # data_all = [anchor, drag_target_filtered, points_2d, drag_target, drag_source, image_target, image_source, points_3d, self.data["K"]]
-        # data_name = "penguin"
-        # torch.save(data_all, f"/tmp/.cache/data_all_{data_name}.pt")
-        # data_all = torch.load(f"/tmp/.cache/data_all_{data_name}.pt")
+        data_all = [anchor, anchor_indice, points_mask, drag_mask, points_2d, drag_target, drag_source, image_target, image_source, points_3d, self.data["K"]]
+        torch.save(data_all, f"/tmp/.cache/data_all_{self.cfg.object_name}.pt")
+        
 
         N = anchor.shape[0]
         q_init = torch.tensor([1, 0, 0, 0], dtype=torch.float32, device=self.device)
@@ -989,6 +984,21 @@ class Runner:
         ##########################################################
         #################### 4. drag optimize ####################
         ##########################################################
+        
+        groups, outliers, group_trans = local_rigid_grouping(
+            points_3d_filtered, drag_target_filtered, k=20,
+            min_inlier_ratio=0.7, min_inlier_size=100, max_expansion_iterations=100,
+            reprojection_error=3.0, confidence=0.99, iterations_count=100,
+            camera_matrix=self.data["K"][0]
+        )
+        groud_id = - torch.ones(points_3d_filtered.shape[0], dtype=torch.long, device=self.device)
+        for i, group in enumerate(groups):
+            groud_id[group] = i
+        group_id_all = - torch.ones(points_3d.shape[0], dtype=torch.long, device=self.device)
+        group_id_all[points_mask] = groud_id
+        anchor_group_id = group_id_all[anchor_indice]
+        
+        
         from jhutil import color_log; color_log(4444, "drag optimize ")
         with torch.no_grad():
             distances, indices_knn = knn_jh(anchor, anchor, k=5)
@@ -1000,6 +1010,8 @@ class Runner:
             anchor_translated = anchor + t  # (N, 3)
             
             loss_arap = arap_loss(anchor, anchor_translated, R, weight, indices_knn)
+            loss_arap_g = arap_loss_grouped(anchor, anchor_translated, R, anchor_group_id)
+            
             
             points_lbs, quats_lbs = linear_blend_skinning_knn(points_3d, anchor, R, t)
             updated_quaternions = quaternion_multiply(quats_lbs, quats_origin)
@@ -1010,7 +1022,7 @@ class Runner:
             points_lbs_filtered_2d, _ = self.project_to_2d(points_lbs_filtered)
             loss_drag = drag_loss(points_lbs_filtered_2d, drag_target_filtered)
             
-            loss = coef_arap_drag * loss_arap + coef_drag * loss_drag
+            loss = coef_arap_drag * loss_arap + coef_drag * loss_drag + 0.5 * coef_arap_drag * loss_arap_g
             
             loss.backward(retain_graph=True)
             anchor_optimizer.step()
@@ -1478,3 +1490,7 @@ if __name__ == "__main__":
             )
 
     cli(main, cfg, verbose=True)
+
+        wandb.finish()
+    else:
+        print("wandb is needed for hyperparameter tuning")
