@@ -41,6 +41,7 @@ from gsplat.compression import PngCompression
 from gsplat.distributed import cli
 from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
+
 # from gsplat.optimizers import SelectiveAdam
 from einops import rearrange
 
@@ -53,13 +54,31 @@ import torch.nn as nn
 from gesi.loss import arap_loss, drag_loss, drot_loss, arap_loss_grouped
 from gesi.mini_pytorch3d import quaternion_to_matrix
 from jhutil.algorithm import knn as knn_jh
-from gesi.helper import load_points_and_anchor, save_points_and_anchor, make_simple_goal, rbf_weight, deform_point_cloud_arap, voxelize_pointcloud_and_get_means, linear_blend_skinning_knn, cluster_largest, get_visible_mask_by_depth, get_target_indices_drag, project_pointcloud_to_2d, deform_point_cloud_arap_2d
+from gesi.helper import (
+    load_points_and_anchor,
+    save_points_and_anchor,
+    make_simple_goal,
+    rbf_weight,
+    deform_point_cloud_arap,
+    voxelize_pointcloud_and_get_means,
+    linear_blend_skinning_knn,
+    cluster_largest,
+    get_visible_mask_by_depth,
+    get_target_indices_drag,
+    project_pointcloud_to_2d,
+    deform_point_cloud_arap_2d,
+)
 from gesi.mini_pytorch3d import quaternion_multiply, quaternion_invert
 from jhutil import save_img, convert_to_gif, show_matching
-from jhutil import get_img_diff, crop_two_image_with_background, crop_two_image_with_alpha
+from jhutil import (
+    get_img_diff,
+    crop_two_image_with_background,
+    crop_two_image_with_alpha,
+)
 from gesi.roma import get_drag_roma
 import warnings
 import torch_fpsample
+from sweep_config import sweep_config, best_sweep_config, SWEEP_WHOLE_ID
 from gesi.rigid_grouping import local_rigid_grouping
 
 warnings.simplefilter("ignore")
@@ -196,15 +215,15 @@ class Config:
     single_finetune: bool = False
 
     finetuning_drot: bool = False
-    
+
     wandb: bool = False
-    
+
     object_name: str = None
-    
+
     wandb_group: str = None
-    
+
     wandb_sweep: bool = False
-    
+
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
         self.save_steps = [int(i * factor) for i in self.save_steps]
@@ -484,9 +503,26 @@ class Runner:
                 render_fn=self._viewer_render_fn,
                 mode="training",
             )
+
+        if cfg.wandb_sweep:
+            wandb.init(
+                project="GESI",
+                dir="./wandb",
+                group=cfg.wandb_group,
+                name=cfg.object_name,
+                settings=wandb.Settings(start_method="fork"),
+            )
+        else:
+            wandb.init(
+                project="GESI",
+                dir="./wandb",
+                group=cfg.wandb_group,
+                name=cfg.object_name,
+                settings=wandb.Settings(start_method="fork"),
+                config=best_sweep_config,
+            )
         
-        self.hyperparam = wandb.config
-            
+        self.hpara = wandb.config
 
     def rasterize_splats(
         self,
@@ -888,10 +924,6 @@ class Runner:
         drag_iterations=500,
         rgb_iteration=500,
         filter_distance=1,
-        coef_arap_drag=3e4,
-        coef_arap_rgb=1,
-        coef_drag=1,
-        lr=1e-2,
         is_eval=True,
         save_image=False,
         rgb_optimize=False,
@@ -899,6 +931,21 @@ class Runner:
         if is_eval:
             step = 0
             self.eval(step=step)
+
+        # get haraparameter
+        n_anchor             = self.hpara.n_anchor
+        coef_drag            = self.hpara.coef_drag
+        coef_arap_drag       = self.hpara.coef_arap_drag
+        coef_group_arap_drag = self.hpara.coef_group_arap_drag
+        coef_arap_drag       = self.hpara.coef_arap_drag
+        coef_arap_rgb        = self.hpara.coef_arap_rgb
+        coef_drag            = self.hpara.coef_drag
+        lr_q                 = self.hpara.lr_q
+        lr_t                 = self.hpara.lr_t
+        rigidity_k           = self.hpara.rigidity_k
+        reprojection_error   = self.hpara.reprojection_error
+        anchor_k             = self.hpara.anchor_k
+        rbf_gamma            = self.hpara.rbf_gamma
         
         ##########################################################
         ################## 1. get drag via RoMa ##################
@@ -906,65 +953,83 @@ class Runner:
 
         from jhutil import color_log; color_log(1111, "get drag via RoMa")
         with torch.no_grad():
-            image_source, image_target = self.fetch_comparable_two_image(return_rgba=True)
-            drag_source, drag_target, bbox = get_drag_roma(image_source, image_target, device=self.device)
+            image_source, image_target = self.fetch_comparable_two_image(
+                return_rgba=True
+            )
+            drag_source, drag_target, bbox = get_drag_roma(
+                image_source, image_target, device=self.device
+            )
             H = image_source.shape[1]
             W = image_source.shape[2]
-            
+
         ##########################################################
         ################ 2. get target using drag ################
         ##########################################################
         from jhutil import color_log; color_log(2222, "get target using drag")
         points_3d = self.splats.means.clone().detach()
         points_3d.requires_grad = True
-        
+
         # set drag
         with torch.no_grad():
             points_2d, points_depth = self.project_to_2d(points_3d)
-            
+
         def get_drag_mask(points_2d, points_depth, drag_source, filter_distance):
-    
+
             points_mask = get_visible_mask_by_depth(points_2d, points_depth, H, W)
             filtered_points_2d = points_2d[points_mask]
-            
-            distances, nearest_indices = knn_jh(filtered_points_2d.detach(), drag_source.detach(), k=1)
-            
+
+            distances, nearest_indices = knn_jh(
+                filtered_points_2d.detach(), drag_source.detach(), k=1
+            )
+
             distances = distances.squeeze()
             nearest_indices = nearest_indices.squeeze()
-            
+
             points_mask[points_mask == True] = distances < filter_distance
             drag_mask = nearest_indices[distances < filter_distance]
-            
+
             return points_mask, drag_mask
-        
-        points_mask, drag_mask = get_drag_mask(points_2d, points_depth, drag_source, filter_distance)
+
+        points_mask, drag_mask = get_drag_mask(
+            points_2d, points_depth, drag_source, filter_distance
+        )
         points_3d_filtered = points_3d[points_mask]
         drag_target_filtered = drag_target[drag_mask]
-        
-        if wandb.run:
+
+        if wandb.run and not cfg.wandb_sweep:
             n_drag = len(drag_source)
             n_pts = 5000
-            
-            img1 = rearrange(image_source[0], 'h w c -> c h w')
-            img2 = rearrange(image_target[0], 'h w c -> c h w')
-            
-            matching_image = show_matching(img1[:3], img2[:3], drag_source[::n_drag//n_pts], drag_target[::n_drag//n_pts], bbox=bbox, skip_line=True)
-            wandb.log({"matching": wandb.Image(matching_image, caption="matching_image"),}, commit=True)
-        
-        
+
+            img1 = rearrange(image_source[0], "h w c -> c h w")
+            img2 = rearrange(image_target[0], "h w c -> c h w")
+
+            matching_image = show_matching(
+                img1[:3],
+                img2[:3],
+                drag_source[:: n_drag // n_pts],
+                drag_target[:: n_drag // n_pts],
+                bbox=bbox,
+                skip_line=True,
+            )
+            wandb.log(
+                {
+                    "matching": wandb.Image(matching_image, caption="matching_image"),
+                },
+                commit=True,
+            )
+
         ##########################################################
         ########### 3. initialize anchor and optimizer ###########
         ##########################################################
         from jhutil import color_log; color_log(3333, "initialize anchor and optimizer")
-        
+
         # anchor = voxelize_pointcloud_and_get_means(points_3d, voxel_size=0.05)
-        anchor, anchor_indice = torch_fpsample.sample(points_3d.cpu(), 500)
-        
+        anchor, anchor_indice = torch_fpsample.sample(points_3d.cpu(), n_anchor)
+
         anchor = anchor.to(self.device)
-        
+
         data_all = [anchor, anchor_indice, points_mask, drag_mask, points_2d, drag_target, drag_source, image_target, image_source, points_3d, self.data["K"]]
         torch.save(data_all, f"/tmp/.cache/data_all_{self.cfg.object_name}.pt")
-        
 
         N = anchor.shape[0]
         q_init = torch.tensor([1, 0, 0, 0], dtype=torch.float32, device=self.device)
@@ -976,86 +1041,110 @@ class Runner:
 
         anchor_optimizer = torch.optim.Adam(
             [
-                {"params": q, "lr": lr},
-                {"params": t, "lr": lr},
+                {"params": q, "lr": lr_q},
+                {"params": t, "lr": lr_t},
             ]
         )
 
         ##########################################################
         #################### 4. drag optimize ####################
         ##########################################################
-        
+
         groups, outliers, group_trans = local_rigid_grouping(
-            points_3d_filtered, drag_target_filtered, k=20,
-            min_inlier_ratio=0.7, min_inlier_size=100, max_expansion_iterations=100,
-            reprojection_error=3.0, confidence=0.99, iterations_count=100,
-            camera_matrix=self.data["K"][0]
+            points_3d_filtered,
+            drag_target_filtered,
+            k=rigidity_k,
+            min_inlier_ratio=0.7,
+            min_inlier_size=100,
+            max_expansion_iterations=100,
+            reprojection_error=reprojection_error,
+            confidence=0.99,
+            iterations_count=100,
+            camera_matrix=self.data["K"][0],
         )
-        groud_id = - torch.ones(points_3d_filtered.shape[0], dtype=torch.long, device=self.device)
+        groud_id = -torch.ones(
+            points_3d_filtered.shape[0], dtype=torch.long, device=self.device
+        )
         for i, group in enumerate(groups):
             groud_id[group] = i
-        group_id_all = - torch.ones(points_3d.shape[0], dtype=torch.long, device=self.device)
+        group_id_all = -torch.ones(
+            points_3d.shape[0], dtype=torch.long, device=self.device
+        )
         group_id_all[points_mask] = groud_id
         anchor_group_id = group_id_all[anchor_indice]
-        
-        
+
         from jhutil import color_log; color_log(4444, "drag optimize ")
         with torch.no_grad():
-            distances, indices_knn = knn_jh(anchor, anchor, k=5)
-            weight = rbf_weight(distances, gamma=30)
-        quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
-        
+            distances, indices_knn = knn_jh(anchor, anchor, k=anchor_k)
+            weight = rbf_weight(distances, gamma=rbf_gamma)
+        quats_origin = F.normalize(self.splats["quats"].clone().detach(), dim=-1)
+
         for i in tqdm(range(drag_iterations)):
             R = quaternion_to_matrix(F.normalize(q, dim=-1)).squeeze()  # (N, 3, 3)
             anchor_translated = anchor + t  # (N, 3)
-            
+
             loss_arap = arap_loss(anchor, anchor_translated, R, weight, indices_knn)
-            loss_arap_g = arap_loss_grouped(anchor, anchor_translated, R, anchor_group_id)
-            
-            
+            loss_arap_g = arap_loss_grouped(
+                anchor, anchor_translated, R, anchor_group_id
+            )
+
             points_lbs, quats_lbs = linear_blend_skinning_knn(points_3d, anchor, R, t)
             updated_quaternions = quaternion_multiply(quats_lbs, quats_origin)
-            self.splats['means'].data.copy_(points_lbs)
-            self.splats['quats'].data.copy_(updated_quaternions)
-            
+            self.splats["means"].data.copy_(points_lbs)
+            self.splats["quats"].data.copy_(updated_quaternions)
+
             points_lbs_filtered = points_lbs[points_mask]
             points_lbs_filtered_2d, _ = self.project_to_2d(points_lbs_filtered)
             loss_drag = drag_loss(points_lbs_filtered_2d, drag_target_filtered)
-            
-            loss = coef_arap_drag * loss_arap + coef_drag * loss_drag + 0.5 * coef_arap_drag * loss_arap_g
-            
+
+            loss = (
+                coef_arap_drag * loss_arap
+                + coef_drag * loss_drag
+                + coef_group_arap_drag * loss_arap_g
+            )
+
             loss.backward(retain_graph=True)
             anchor_optimizer.step()
             anchor_optimizer.zero_grad()
-            
-            if wandb.run:
+
+            if wandb.run and not cfg.wandb_sweep:
                 wandb.log({"loss_arap": loss_arap, "loss_drag": loss_drag}, step=i)
-                
+
                 if i % 100 == 0:
-                    image_source, image_target = self.fetch_comparable_two_image(return_rgba=True, return_shape='chw')
-                    _, img1, img2 = crop_two_image_with_alpha(image_source, image_target)
+                    image_source, image_target = self.fetch_comparable_two_image(
+                        return_rgba=True, return_shape="chw"
+                    )
+                    _, img1, img2 = crop_two_image_with_alpha(
+                        image_source, image_target
+                    )
                     diff_img = get_img_diff(img1[:3], img2[:3])
-                    wandb.log({"train_img_diff": wandb.Image(diff_img, caption="train_img_diff")}, step=i, commit=True)
-                
+                    wandb.log(
+                        {"train_img_diff": wandb.Image(diff_img, caption="train_img_diff")},
+                        step=i,
+                        commit=True,
+                    )
+
             if save_image:
                 with torch.no_grad():
                     image_source, image_target = self.fetch_comparable_two_image()
-                
+
                 w_from, h_from, w_to, h_to = bbox
                 image_source = image_source[:, h_from:h_to, w_from:w_to]
                 image_target = image_target[:, h_from:h_to, w_from:w_to]
-                
-                image_concat = torch.cat([image_source.squeeze(), image_target.squeeze()], dim=1)
+
+                image_concat = torch.cat(
+                    [image_source.squeeze(), image_target.squeeze()], dim=1
+                )
                 folder_path = "/data2/wlsgur4011/GESI/output_images/drag"
                 os.makedirs(folder_path, exist_ok=True)
                 save_img(image_concat, os.path.join(folder_path, f"drag_{i:03}.png"))
                 if i == drag_iterations - 1:
                     convert_to_gif(folder_path)
-        
+
         if is_eval:
             step += drag_iterations
             self.eval(step=step)
-        
+
         ##########################################################
         #################### 5. rgb optimize #####################
         ##########################################################
@@ -1063,26 +1152,26 @@ class Runner:
             return
 
         from jhutil import color_log; color_log(5555, "rgb optimize")
-        
-        points_origin = self.splats['means'].clone().detach()
-        quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
+
+        points_origin = self.splats["means"].clone().detach()
+        quats_origin = F.normalize(self.splats["quats"].clone().detach(), dim=-1)
         quats_origin_invert = quaternion_invert(quats_origin)
         with torch.no_grad():
             distances, indices_knn = knn_jh(points_origin, points_origin, k=5)
             weight = rbf_weight(distances, gamma=30)
 
         for i in tqdm(range(rgb_iteration)):
-            quats_current = F.normalize(self.splats['quats'], dim=-1)
+            quats_current = F.normalize(self.splats["quats"], dim=-1)
             q = quaternion_multiply(quats_current, quats_origin_invert)
             R = quaternion_to_matrix(q).squeeze()  # (N, 3, 3)
-            points_now = self.splats['means']
+            points_now = self.splats["means"]
             loss_arap = arap_loss(points_origin, points_now, R, weight, indices_knn)
             loss_rgb = self.render_and_calc_rgb_loss()
-            
+
             loss = coef_arap_rgb * loss_arap + loss_rgb
             loss.backward()
-            
-            for var_name in ['means', 'quats']:
+
+            for var_name in ["means", "quats"]:
                 optimizer = self.optimizers[var_name]
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
@@ -1090,21 +1179,22 @@ class Runner:
         if is_eval:
             step += rgb_iteration
             self.eval(step=step)
-    
+
         if save_image:
             with torch.no_grad():
                 image_source, image_target = self.fetch_comparable_two_image()
-            
+
             w_from, h_from, w_to, h_to = bbox
             image_source = image_source[:, h_from:h_to, w_from:w_to]
             image_target = image_target[:, h_from:h_to, w_from:w_to]
-                
-            image_concat = torch.cat([image_source.squeeze(), image_target.squeeze()], dim=1)
+
+            image_concat = torch.cat(
+                [image_source.squeeze(), image_target.squeeze()], dim=1
+            )
             folder_path = "/data2/wlsgur4011/GESI/output_images/drag"
             os.makedirs(folder_path, exist_ok=True)
             save_img(image_concat, os.path.join(folder_path, f"rgb.png"))
-    
-    
+
     def project_to_2d(self, points):
         if not hasattr(self, "data"):
             trainloader = torch.utils.data.DataLoader(
@@ -1123,9 +1213,9 @@ class Runner:
         Ks = data["K"].to(device)  # [1, 3, 3]
         means2d, depth = project_pointcloud_to_2d(points, camtoworlds, Ks)
         return means2d, depth
-    
-    def fetch_comparable_two_image(self, return_rgba=False, return_shape='bhwc'):
-        
+
+    def fetch_comparable_two_image(self, return_rgba=False, return_shape="bhwc"):
+
         if not hasattr(self, "data"):
             trainloader = torch.utils.data.DataLoader(
                 self.trainset,
@@ -1148,9 +1238,7 @@ class Runner:
         height, width = gt_images.shape[1:3]
 
         # TODO: render splats in all training images
-        
-        
-        
+
         renders, alphas, info = self.rasterize_splats(
             camtoworlds=camtoworlds,
             Ks=Ks,
@@ -1164,23 +1252,21 @@ class Runner:
             masks=masks,
         )
         # TODO: get max matching images
-        
-        
+
         if return_rgba:
             renders = torch.concat([renders, alphas], dim=-1)
             gt_images = torch.concat([gt_images, gt_alphas], dim=-1)
-        
-        if return_shape == 'bhwc':
+
+        if return_shape == "bhwc":
             pass
-        elif return_shape == 'chw':
+        elif return_shape == "chw":
             renders = renders[0].permute(2, 0, 1)
             gt_images = gt_images[0].permute(2, 0, 1)
         else:
             raise ValueError(f"Invalid shape: {return_shape}")
-        
+
         return renders, gt_images
-    
-    
+
     def render_and_calc_rgb_loss(self):
         renders, gt_images = self.fetch_comparable_two_image()
         if renders.shape[-1] == 4:
@@ -1245,11 +1331,11 @@ class Runner:
                 metrics["psnr"].append(self.psnr(colors_p, pixels_p))
                 _, img1, img2 = crop_two_image_with_background(colors_p[0], pixels_p[0])
                 img_diff_list.append(get_img_diff(img1, img2))
-                
+
                 if max(metrics["psnr"]) == metrics["psnr"][-1]:
                     splat = {"step": step, "splats": self.splats.state_dict()}
                     torch.save(splat, f"{self.ckpt_dir}/ckpt_best_psnr.pt")
-                    
+
                 metrics["ssim"].append(self.ssim(colors_p, pixels_p))
                 metrics["lpips"].append(self.lpips(colors_p, pixels_p))
                 if cfg.use_bilateral_grid:
@@ -1267,27 +1353,31 @@ class Runner:
                     "num_GS": len(self.splats["means"]),
                 }
             )
-            from jhutil import color_log; color_log(0000, f"PSNR: {stats['psnr']:.3f}, SSIM: {stats['ssim']:.4f}, LPIPS: {stats['lpips']:.3f} ")
+            from jhutil import color_log; color_log(
+                0000,
+                f"PSNR: {stats['psnr']:.3f}, SSIM: {stats['ssim']:.4f}, LPIPS: {stats['lpips']:.3f} ",
+            )
             print(
                 f"Time: {stats['ellipse_time']:.3f}s/image "
                 f"Number of GS: {stats['num_GS']}"
             )
-            if wandb.run:
+            if wandb.run and not cfg.wandb_sweep:
                 img_diffs = [
                     wandb.Image(img_diff_list[0], caption="00"),
                     wandb.Image(img_diff_list[5], caption="05"),
-                    wandb.Image(img_diff_list[10], caption="10")
+                    wandb.Image(img_diff_list[10], caption="10"),
                 ]
-                wandb.log(
-                    {
-                        "psnr": stats["psnr"],
-                        "ssim": stats["ssim"],
-                        "lpips": stats["lpips"],
-                        "img_diff": img_diffs
-                    },
-                    step=step,
-                    commit=True,
-                )
+                logging_data = {
+                    "psnr": stats["psnr"],
+                    "ssim": stats["ssim"],
+                    "lpips": stats["lpips"],
+                    "img_diff": img_diffs,
+                }
+                wandb.log(logging_data, step=step, commit=True)
+                
+            if cfg.wandb_sweep:
+                all_psnr_for_sweep[cfg.object_name] = stats["psnr"]
+                
             # save stats as json
             with open(f"{self.stats_dir}/{stage}_step{step:04d}.json", "w") as f:
                 json.dump(stats, f)
@@ -1441,6 +1531,62 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         time.sleep(1000000)
 
 
+all_psnr_for_sweep = {}
+
+
+def run_all_data(cfg: Config):
+    
+    image_indices = {
+        "bunny" : ("0000", "1000"),
+        "dog" : ("0177", "0279"),
+        # "horse" : ("0120", "0375"),
+        "k1_double_punch" : ("0000", "0555"),
+        "k1_hand_stand" : ("0000", "0300"),
+        "k1_push_up" : ("0370", "0398"),
+        "penguin" : ("0217", "0239"),
+        "trex" : ("0100", "0300"),
+        "truck" : ("0078", "0171"),
+        "wall_e" : ("0222", "0285"),
+        "wolf" : ("0000", "2393"),
+    }
+    for object_name, (index_from, index_to) in image_indices.items():
+        
+        data_dir = f"/data2/wlsgur4011/Diva360_data/3dgs_data/{object_name}_{index_to}/"
+        ckpt = [f"./results/{object_name}_{index_from}/ckpts/ckpt_best_psnr.pt"]
+        result_dir = f"./results/{object_name}_sweep"
+        cfg.result_dir = result_dir
+        cfg.object_name = object_name
+        cfg.data_dir = data_dir
+        cfg.ckpt = ckpt
+        
+        runner = Runner(0, 0, 1, cfg)
+
+        if cfg.ckpt is not None:
+            # run eval only
+            ckpts = [
+                torch.load(file, map_location=runner.device, weights_only=True)
+                for file in cfg.ckpt
+            ]
+            for k in runner.splats.keys():
+                runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
+            step = ckpts[0]["step"]
+            # runner.eval(step=step)
+            # runner.render_traj(step=step)
+            if cfg.compression is not None:
+                runner.run_compression(step=step)
+            if cfg.single_finetune:
+                if cfg.finetuning_drot:
+                    runner.train_drot()
+                else:
+                    runner.train_drag()
+        else:
+            runner.train()
+
+    psnr_mean = np.mean(list(all_psnr_for_sweep.values()))
+    wandb.log(all_psnr_for_sweep)
+    wandb.log({"psnr_mean": psnr_mean})
+
+
 if __name__ == "__main__":
     """
     Usage:
@@ -1489,7 +1635,22 @@ if __name__ == "__main__":
                 "and plas (via 'pip install git+https://github.com/fraunhoferhhi/PLAS.git') "
             )
 
-    cli(main, cfg, verbose=True)
+    # cli(main, cfg, verbose=True)
+
+    # Logger
+    if cfg.wandb:
+        if cfg.wandb_sweep:
+            wandb.agent(SWEEP_WHOLE_ID, function=lambda: run_all_data(cfg), count=30)
+        else:
+            wandb.init(
+                project="GESI",
+                dir="./wandb",
+                group=cfg.wandb_group,
+                name=cfg.object_name,
+                settings=wandb.Settings(start_method="fork"),
+                config=best_sweep_config,
+            )
+            main(0, 0, 1, cfg)
 
         wandb.finish()
     else:
