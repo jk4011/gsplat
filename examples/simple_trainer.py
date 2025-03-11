@@ -24,6 +24,7 @@ from datasets.traj import (
 )
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from fused_ssim import fused_ssim
@@ -44,7 +45,7 @@ from gsplat.strategy import DefaultStrategy, MCMCStrategy
 
 # from gsplat.optimizers import SelectiveAdam
 from einops import rearrange
-
+import torch.optim as optim
 import sys
 
 sys.path.append("/data2/wlsgur4011/GESI/")
@@ -79,7 +80,7 @@ from gesi.roma import get_drag_roma
 import warnings
 import torch_fpsample
 from sweep_config import sweep_config, best_sweep_config, SWEEP_WHOLE_ID
-from gesi.rigid_grouping import local_rigid_grouping
+from gesi.rigid_grouping import local_rigid_grouping, naive_rigid_grouping
 
 warnings.simplefilter("ignore")
 # warnings.filterwarnings("ignore", category=DeprecationWarning) # certain warning
@@ -627,7 +628,7 @@ class Runner:
                 )
             )
 
-        trainloader = torch.utils.data.DataLoader(
+        trainloader = DataLoader(
             self.trainset,
             batch_size=cfg.batch_size,
             shuffle=True,
@@ -926,7 +927,7 @@ class Runner:
         filter_distance=1,
         is_eval=True,
         save_image=False,
-        rgb_optimize=False,
+        rgb_optimize=True,
     ) -> None:
         if is_eval:
             step = 0
@@ -936,7 +937,7 @@ class Runner:
         n_anchor             = self.hpara.n_anchor
         coef_drag            = self.hpara.coef_drag
         coef_arap_drag       = self.hpara.coef_arap_drag
-        coef_group_arap_drag = self.hpara.coef_group_arap_drag
+        coef_group_arap      = self.hpara.coef_group_arap
         coef_arap_drag       = self.hpara.coef_arap_drag
         coef_arap_rgb        = self.hpara.coef_arap_rgb
         coef_drag            = self.hpara.coef_drag
@@ -950,6 +951,9 @@ class Runner:
         ##########################################################
         ################## 1. get drag via RoMa ##################
         ##########################################################
+        
+        # with torch.no_grad():
+        #     image_source, image_target = self.fetch_with_orientation()
 
         from jhutil import color_log; color_log(1111, "get drag via RoMa")
         with torch.no_grad():
@@ -963,9 +967,9 @@ class Runner:
             W = image_source.shape[2]
 
         ##########################################################
-        ################ 2. get target using drag ################
+        ############### 2. filter points and drag  ###############
         ##########################################################
-        from jhutil import color_log; color_log(2222, "get target using drag")
+        from jhutil import color_log; color_log(2222, "filter points and drag")
         points_3d = self.splats.means.clone().detach()
         points_3d.requires_grad = True
 
@@ -1002,7 +1006,9 @@ class Runner:
 
             img1 = rearrange(image_source[0], "h w c -> c h w")
             img2 = rearrange(image_target[0], "h w c -> c h w")
-
+            
+            
+            origin_image = show_matching(img1[:3], img2[:3], bbox=bbox, skip_line=True)
             matching_image = show_matching(
                 img1[:3],
                 img2[:3],
@@ -1011,12 +1017,12 @@ class Runner:
                 bbox=bbox,
                 skip_line=True,
             )
-            wandb.log(
-                {
-                    "matching": wandb.Image(matching_image, caption="matching_image"),
-                },
-                commit=True,
-            )
+            
+            images = [
+                wandb.Image(origin_image, caption="origin_image"),
+                wandb.Image(matching_image, caption="matching_image"),
+            ]
+            wandb.log({"matching": images}, commit=True)
 
         ##########################################################
         ########### 3. initialize anchor and optimizer ###########
@@ -1047,7 +1053,7 @@ class Runner:
         )
 
         ##########################################################
-        #################### 4. drag optimize ####################
+        #################### 4. rigid grouping ###################
         ##########################################################
 
         groups, outliers, group_trans = local_rigid_grouping(
@@ -1073,6 +1079,10 @@ class Runner:
         group_id_all[points_mask] = groud_id
         anchor_group_id = group_id_all[anchor_indice]
 
+        ##########################################################
+        #################### 5. drag optimize ####################
+        ##########################################################
+        
         from jhutil import color_log; color_log(4444, "drag optimize ")
         with torch.no_grad():
             distances, indices_knn = knn_jh(anchor, anchor, k=anchor_k)
@@ -1084,7 +1094,7 @@ class Runner:
             anchor_translated = anchor + t  # (N, 3)
 
             loss_arap = arap_loss(anchor, anchor_translated, R, weight, indices_knn)
-            loss_arap_g = arap_loss_grouped(
+            loss_group_arap = arap_loss_grouped(
                 anchor, anchor_translated, R, anchor_group_id
             )
 
@@ -1098,9 +1108,9 @@ class Runner:
             loss_drag = drag_loss(points_lbs_filtered_2d, drag_target_filtered)
 
             loss = (
-                coef_arap_drag * loss_arap
-                + coef_drag * loss_drag
-                + coef_group_arap_drag * loss_arap_g
+                coef_drag * loss_drag
+                + coef_arap_drag * loss_arap
+                + coef_group_arap * loss_group_arap
             )
 
             loss.backward(retain_graph=True)
@@ -1108,7 +1118,7 @@ class Runner:
             anchor_optimizer.zero_grad()
 
             if wandb.run and not cfg.wandb_sweep:
-                wandb.log({"loss_arap": loss_arap, "loss_drag": loss_drag}, step=i)
+                wandb.log({"loss_arap": loss_arap, "loss_drag": loss_drag, "loss_group_arap": loss_group_arap}, step=i)
 
                 if i % 100 == 0:
                     image_source, image_target = self.fetch_comparable_two_image(
@@ -1151,7 +1161,7 @@ class Runner:
         if not rgb_optimize:
             return
 
-        from jhutil import color_log; color_log(5555, "rgb optimize")
+        from jhutil import color_log; color_log(6666, "rgb optimize")
 
         points_origin = self.splats["means"].clone().detach()
         quats_origin = F.normalize(self.splats["quats"].clone().detach(), dim=-1)
@@ -1195,16 +1205,10 @@ class Runner:
             os.makedirs(folder_path, exist_ok=True)
             save_img(image_concat, os.path.join(folder_path, f"rgb.png"))
 
+
     def project_to_2d(self, points):
         if not hasattr(self, "data"):
-            trainloader = torch.utils.data.DataLoader(
-                self.trainset,
-                batch_size=cfg.batch_size,
-                shuffle=True,
-                num_workers=4,
-                persistent_workers=True,
-                pin_memory=True,
-            )
+            trainloader = DataLoader(self.trainset, batch_size=1)
             trainloader_iter = iter(trainloader)
             self.data = next(trainloader_iter)
         data = self.data
@@ -1214,17 +1218,111 @@ class Runner:
         means2d, depth = project_pointcloud_to_2d(points, camtoworlds, Ks)
         return means2d, depth
 
+    def fectch_query_image(self):
+        
+        device = self.device
+        
+        if not hasattr(self, "data"):
+            trainloader = DataLoader(self.trainset, batch_size=1)
+            trainloader_iter = iter(trainloader)
+            data = next(trainloader_iter)
+        gt_images = data["image"].to(device) / 255.0  # [1, H, W, 3]
+        gt_alphas = data["alpha"].to(device) / 255.0  # [1, H, W, 1]
+        
+        gt_images = torch.concat([gt_images, gt_alphas], dim=-1)
+        
+        return gt_images
+    
+    
+    def fetch_target_data(self):
+        valloader = DataLoader(self.valset, batch_size=1)
+        
+        render_img_list = []
+        camtoworld_list = []
+        
+        for data in valloader:
+            device = self.device
+            gt_images = data["image"].to(device) / 255.0  # [1, H, W, 3]
+            camtoworlds = data["camtoworld"].to(device)  # [1, 4, 4]
+            Ks = data["K"].to(device)  # [1, 3, 3]
+            image_ids = data["image_id"].to(device)
+            masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
+            height, width = gt_images.shape[1:3]
+
+            renders, alphas, info = self.rasterize_splats(
+                camtoworlds=camtoworlds,
+                Ks=Ks,
+                width=width,
+                height=height,
+                sh_degree=3,
+                near_plane=cfg.near_plane,
+                far_plane=cfg.far_plane,
+                image_ids=image_ids,
+                render_mode="RGB+ED" if cfg.depth_loss else "RGB",
+                masks=masks,
+            )
+            render_img = torch.concat([renders, alphas], dim=-1)
+            render_img_list.append(render_img)
+            camtoworld_list.append(camtoworlds)
+        
+        return render_img_list, camtoworld_list
+
+    
+    def fetch_with_orientation(self):
+        query_img = self.fectch_query_image()
+        render_img_list, camtoworld_list = self.fetch_target_data()
+        
+        n_drag_max = 0
+        for i, render_img in enumerate(render_img_list):
+            
+            drag_render, drag_query, bbox = get_drag_roma(
+                render_img, query_img, device=self.device
+            )
+            n_drag = len(drag_render)
+            if n_drag > n_drag_max:
+                n_drag_max = n_drag
+                target_idx = i
+            
+            if True:
+                img1 = rearrange(render_img[0], "h w c -> c h w")
+                img2 = rearrange(query_img[0], "h w c -> c h w")
+                
+                n_pts = n_drag
+                if n_pts == 0:
+                    drag_render = torch.empty(0, 2)
+                    drag_query = torch.empty(0, 2)
+                else:
+                    drag_render = drag_render[:: n_drag // n_pts]
+                    drag_query = drag_query[:: n_drag // n_pts]
+                # breakpoint()
+                origin_image = show_matching(img1[:3], img2[:3], bbox=bbox, skip_line=True)
+                matching_image = show_matching(
+                    img1[:3],
+                    img2[:3],
+                    drag_render,
+                    drag_query,
+                    bbox=bbox,
+                    skip_line=True,
+                )
+                
+                images = [
+                    wandb.Image(origin_image, caption="origin_image"),
+                    wandb.Image(matching_image, caption="matching_image"),
+                ]
+                wandb.log({f"matching_{i}": images})
+
+        wandb.log({"target_idx": target_idx}, commit=True)
+            
+        target_img = render_img_list[target_idx]
+        self.target_campose = camtoworld_list[target_idx]
+
+        return query_img, target_img
+
+    
     def fetch_comparable_two_image(self, return_rgba=False, return_shape="bhwc"):
 
         if not hasattr(self, "data"):
-            trainloader = torch.utils.data.DataLoader(
-                self.trainset,
-                batch_size=cfg.batch_size,
-                shuffle=True,
-                num_workers=4,
-                persistent_workers=True,
-                pin_memory=True,
-            )
+            trainloader = DataLoader(self.trainset, batch_size=1)
             trainloader_iter = iter(trainloader)
             self.data = next(trainloader_iter)
         data = self.data
@@ -1285,7 +1383,7 @@ class Runner:
         world_rank = self.world_rank
         world_size = self.world_size
 
-        valloader = torch.utils.data.DataLoader(
+        valloader = DataLoader(
             self.valset, batch_size=1, shuffle=False, num_workers=1
         )
         ellipse_time = 0
