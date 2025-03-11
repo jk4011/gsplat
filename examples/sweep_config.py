@@ -27,6 +27,7 @@ best_sweep_config = EasyDict({
     "anchor_k": 9,
     "n_anchor": 300,
     "coef_drag": 1,
+    "coef_drag_3d": 3000,
     "rbf_gamma": 50,
     "rigidity_k": 40,
     "coef_arap_rgb": 1,

@@ -81,6 +81,8 @@ import warnings
 import torch_fpsample
 from sweep_config import sweep_config, best_sweep_config, SWEEP_WHOLE_ID
 from gesi.rigid_grouping import local_rigid_grouping, naive_rigid_grouping
+from jhutil import save_video
+from torch.nn import SmoothL1Loss
 
 warnings.simplefilter("ignore")
 # warnings.filterwarnings("ignore", category=DeprecationWarning) # certain warning
@@ -224,6 +226,8 @@ class Config:
     wandb_group: str = None
 
     wandb_sweep: bool = False
+    
+    make_motion: bool = False
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -927,7 +931,7 @@ class Runner:
         filter_distance=1,
         is_eval=True,
         save_image=False,
-        rgb_optimize=True,
+        rgb_optimize=False,
     ) -> None:
         if is_eval:
             step = 0
@@ -936,8 +940,8 @@ class Runner:
         # get haraparameter
         n_anchor             = self.hpara.n_anchor
         coef_drag            = self.hpara.coef_drag
-        coef_arap_drag       = self.hpara.coef_arap_drag
-        coef_group_arap      = self.hpara.coef_group_arap
+        coef_arap_drag       = self.hpara.coef_arap_drag * 3
+        coef_group_arap      = self.hpara.coef_group_arap * 3
         coef_arap_drag       = self.hpara.coef_arap_drag
         coef_arap_rgb        = self.hpara.coef_arap_rgb
         coef_drag            = self.hpara.coef_drag
@@ -947,6 +951,9 @@ class Runner:
         reprojection_error   = self.hpara.reprojection_error
         anchor_k             = self.hpara.anchor_k
         rbf_gamma            = self.hpara.rbf_gamma
+        
+        points_init = self.splats["means"].clone().detach()
+        quats_init = self.splats["quats"].clone().detach()
         
         ##########################################################
         ################## 1. get drag via RoMa ##################
@@ -1088,7 +1095,7 @@ class Runner:
             distances, indices_knn = knn_jh(anchor, anchor, k=anchor_k)
             weight = rbf_weight(distances, gamma=rbf_gamma)
         quats_origin = F.normalize(self.splats["quats"].clone().detach(), dim=-1)
-
+        
         for i in tqdm(range(drag_iterations)):
             R = quaternion_to_matrix(F.normalize(q, dim=-1)).squeeze()  # (N, 3, 3)
             anchor_translated = anchor + t  # (N, 3)
@@ -1141,20 +1148,26 @@ class Runner:
                 w_from, h_from, w_to, h_to = bbox
                 image_source = image_source[:, h_from:h_to, w_from:w_to]
                 image_target = image_target[:, h_from:h_to, w_from:w_to]
-
+                if i == 0:
+                    image_list = []
                 image_concat = torch.cat(
                     [image_source.squeeze(), image_target.squeeze()], dim=1
                 )
-                folder_path = "/data2/wlsgur4011/GESI/output_images/drag"
-                os.makedirs(folder_path, exist_ok=True)
-                save_img(image_concat, os.path.join(folder_path, f"drag_{i:03}.png"))
+                image_list.append(image_concat)
+                
                 if i == drag_iterations - 1:
-                    convert_to_gif(folder_path)
+                    output_path = f"/data2/wlsgur4011/GESI/output_drag/{self.cfg.object_name}.mp4"
+                    save_video(image_list, output_path)
+                
+                
 
         if is_eval:
             step += drag_iterations
             self.eval(step=step)
 
+        # data for motion
+        torch.save([points_init, quats_init, anchor, R, t.detach(), anchor_group_id, bbox], f"/tmp/.cache/{self.cfg.object_name}_motion_data.pt")
+        
         ##########################################################
         #################### 5. rgb optimize #####################
         ##########################################################
@@ -1205,6 +1218,104 @@ class Runner:
             os.makedirs(folder_path, exist_ok=True)
             save_img(image_concat, os.path.join(folder_path, f"rgb.png"))
 
+    
+    def make_motion(self, drag_iterations=200, save_image=True, close_threshold=0.01):
+        points_init, quats_init, anchor, R_goal, t_goal, anchor_group_id, bbox = \
+            torch.load(f"/tmp/.cache/{self.cfg.object_name}_motion_data.pt")
+        self.splats["means"].data.copy_(points_init)
+        self.splats["quats"].data.copy_(quats_init)
+        
+        
+        # get haraparameter
+        coef_drag            = self.hpara.coef_drag_3d
+        coef_group_arap      = self.hpara.coef_group_arap
+        coef_arap_drag       = self.hpara.coef_arap_drag
+        lr_q                 = self.hpara.lr_q * 0.05
+        lr_t                 = self.hpara.lr_t * 0.05
+        anchor_k             = self.hpara.anchor_k
+        rbf_gamma            = self.hpara.rbf_gamma
+        
+        ##########################################################
+        ########### a. initialize anchor and optimizer ###########
+        ##########################################################
+        
+        points_origin = self.splats["means"].clone().detach()
+        quats_origin = F.normalize(self.splats["quats"].clone().detach(), dim=-1)
+        
+        self.splats["means"].data.copy_(points_origin)
+        self.splats["quats"].data.copy_(quats_origin)
+        
+        points_3d = self.splats.means.clone().detach()
+
+        anchor = anchor.to(self.device)
+        N = anchor.shape[0]
+        # re-init parameter
+        q_init = torch.tensor([1, 0, 0, 0], dtype=torch.float32, device=self.device)
+        q_init = q_init.unsqueeze(0).repeat(N, 1, 1)
+        t_init = torch.zeros((N, 3), dtype=torch.float32, device=self.device)
+
+        q = nn.Parameter(q_init)  # (N, 3, 3)
+        t = nn.Parameter(t_init)  # (N, 3)
+
+        anchor_optimizer = torch.optim.Adam(
+            [
+                {"params": q, "lr": lr_q},
+                {"params": t, "lr": lr_t},
+            ]
+        )
+        
+        ##########################################################
+        #################### b. drag optimize ####################
+        ##########################################################
+        if not self.cfg.disable_viewer:
+            breakpoint()
+        
+        with torch.no_grad():
+            distances, indices_knn = knn_jh(anchor, anchor, k=anchor_k)
+            weight = rbf_weight(distances, gamma=rbf_gamma)
+
+        loss_fn = SmoothL1Loss(beta=0.1)
+        for i in tqdm(range(drag_iterations)):
+            R = quaternion_to_matrix(F.normalize(q, dim=-1)).squeeze()  # (N, 3, 3)
+            anchor_translated = anchor + t  # (N, 3)
+
+            loss_arap = arap_loss(anchor, anchor_translated, R, weight, indices_knn)
+            loss_group_arap = arap_loss_grouped(
+                anchor, anchor_translated, R, anchor_group_id
+            )
+            loss_drag = loss_fn(R, R_goal) + loss_fn(t, t_goal)
+            points_lbs, quats_lbs = linear_blend_skinning_knn(points_3d, anchor, R, t)
+            updated_quaternions = quaternion_multiply(quats_lbs, quats_origin)
+            self.splats["means"].data.copy_(points_lbs)
+            self.splats["quats"].data.copy_(updated_quaternions)
+            
+            loss = (
+                coef_drag * loss_drag
+                + (1 - i / drag_iterations) * coef_arap_drag * loss_arap
+                + (1 - i / drag_iterations) * coef_group_arap * loss_group_arap
+            )
+
+            loss.backward(retain_graph=True)
+            anchor_optimizer.step()
+            anchor_optimizer.zero_grad()
+    
+            with torch.no_grad():
+                image_source, image_target = self.fetch_comparable_two_image()
+
+            w_from, h_from, w_to, h_to = bbox
+            image_source = image_source[:, h_from:h_to, w_from:w_to]
+            image_target = image_target[:, h_from:h_to, w_from:w_to]
+            if i == 0:
+                image_list = []
+            image_concat = torch.cat(
+                [image_source.squeeze(), image_target.squeeze()], dim=1
+            )
+            image_list.append(image_concat)
+                
+        output_path = f"/data2/wlsgur4011/GESI/output_drag/{self.cfg.object_name}_motion.mp4"
+        image_list_rewind = image_list + image_list[::-1]
+        save_video(image_list_rewind, output_path, fps=60)
+                
 
     def project_to_2d(self, points):
         if not hasattr(self, "data"):
@@ -1617,8 +1728,8 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         if cfg.compression is not None:
             runner.run_compression(step=step)
         if cfg.single_finetune:
-            if cfg.finetuning_drot:
-                runner.train_drot()
+            if cfg.make_motion:
+                runner.make_motion()
             else:
                 runner.train_drag()
     else:
