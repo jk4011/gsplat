@@ -16,6 +16,7 @@ from .normalize import (
     transform_points,
 )
 from .diva360 import SceneManagerDiva360
+from .dfa import SceneManagerDFA
 
 
 def _get_rel_paths(path_dir: str) -> List[str]:
@@ -36,14 +37,14 @@ class Parser:
         factor: int = 1,
         normalize: bool = False,
         test_every: int = 8,
-        no_colmap: bool = True,
+        data_name: str = "diva360",
     ):
         self.data_dir = data_dir
         self.factor = factor
         self.normalize = normalize
         self.test_every = test_every
 
-        if no_colmap:  # Diva360 data
+        if data_name == "diva360":
             json_path = os.path.join(data_dir, "cameras.json")
             
             manager = SceneManagerDiva360(json_path)
@@ -51,6 +52,12 @@ class Parser:
             manager.load_extrinsics_from_json()
             manager.genrate_random_points3D()
 
+        elif data_name == "DFA":
+            manager = SceneManagerDFA(data_dir)
+            manager.load_cameras()
+            manager.load_extrinsics()
+            manager.genrate_random_points3D()
+            
         else:
             colmap_dir = os.path.join(data_dir, "sparse/0/")
             if not os.path.exists(colmap_dir):

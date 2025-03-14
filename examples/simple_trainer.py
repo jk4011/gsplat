@@ -79,7 +79,7 @@ from jhutil import (
 from gesi.roma import get_drag_roma
 import warnings
 import torch_fpsample
-from sweep_config import sweep_config, best_sweep_config, SWEEP_WHOLE_ID
+from sweep_config import sweep_config, best_config, SWEEP_WHOLE_ID
 from gesi.rigid_grouping import local_rigid_grouping, naive_rigid_grouping
 from jhutil import save_video
 from torch.nn import SmoothL1Loss
@@ -213,7 +213,7 @@ class Config:
 
     lpips_net: Literal["vgg", "alex"] = "alex"
 
-    no_colmap: bool = False
+    data_name: str = "diva360"
 
     single_finetune: bool = False
 
@@ -369,7 +369,7 @@ class Runner:
             factor=cfg.data_factor,
             normalize=cfg.normalize_world_space,
             test_every=cfg.test_every,
-            no_colmap=cfg.no_colmap,
+            data_name=cfg.data_name,
         )
         self.trainset = Dataset(
             self.parser,
@@ -517,17 +517,24 @@ class Runner:
                 name=cfg.object_name,
                 settings=wandb.Settings(start_method="fork"),
             )
-        else:
+            self.hpara = wandb.config
+        elif cfg.wandb:
             wandb.init(
                 project="GESI",
                 dir="./wandb",
                 group=cfg.wandb_group,
                 name=cfg.object_name,
                 settings=wandb.Settings(start_method="fork"),
-                config=best_sweep_config,
+                config=best_config,
             )
+            self.hpara = best_config
+        else:
+            self.hpara = best_config
         
-        self.hpara = wandb.config
+        if cfg.data_name == "DFA":
+            self.backgrounds = torch.ones(1, 3, device=self.device)
+        else:
+            self.backgrounds = torch.zeros(1, 3, device=self.device)
 
     def rasterize_splats(
         self,
@@ -536,6 +543,7 @@ class Runner:
         width: int,
         height: int,
         masks: Optional[Tensor] = None,
+        interactive: bool = False,
         **kwargs,
     ) -> Tuple[Tensor, Tensor, Dict]:
         means = self.splats["means"]  # [N, 3]
@@ -558,6 +566,7 @@ class Runner:
         else:
             colors = torch.cat([self.splats["sh0"], self.splats["shN"]], 1)  # [N, K, 3]
 
+            
         rasterize_mode = "antialiased" if self.cfg.antialiased else "classic"
         render_colors, render_alphas, info = rasterization(
             means=means,
@@ -579,6 +588,7 @@ class Runner:
             rasterize_mode=rasterize_mode,
             distributed=self.world_size > 1,
             camera_model=self.cfg.camera_model,
+            backgrounds=self.backgrounds if not interactive else None,
             **kwargs,
         )
         if masks is not None:
@@ -930,7 +940,7 @@ class Runner:
         rgb_iteration=500,
         filter_distance=1,
         is_eval=True,
-        save_image=False,
+        is_save_video=True,
         rgb_optimize=False,
     ) -> None:
         if is_eval:
@@ -1141,7 +1151,7 @@ class Runner:
                         commit=True,
                     )
 
-            if save_image:
+            if is_save_video:
                 with torch.no_grad():
                     image_source, image_target = self.fetch_comparable_two_image()
 
@@ -1156,8 +1166,8 @@ class Runner:
                 image_list.append(image_concat)
                 
                 if i == drag_iterations - 1:
-                    output_path = f"/data2/wlsgur4011/GESI/output_drag/{self.cfg.object_name}.mp4"
-                    save_video(image_list, output_path)
+                    output_path = f"/data2/wlsgur4011/GESI/output_drag/optimization_{self.cfg.object_name}.mp4"
+                    save_video(image_list[:100], output_path, fps=30)
                 
                 
 
@@ -1203,7 +1213,7 @@ class Runner:
             step += rgb_iteration
             self.eval(step=step)
 
-        if save_image:
+        if is_save_video:
             with torch.no_grad():
                 image_source, image_target = self.fetch_comparable_two_image()
 
@@ -1219,7 +1229,7 @@ class Runner:
             save_img(image_concat, os.path.join(folder_path, f"rgb.png"))
 
     
-    def make_motion(self, drag_iterations=200, save_image=True, close_threshold=0.01):
+    def make_motion(self, n_iter=300):
         points_init, quats_init, anchor, R_goal, t_goal, anchor_group_id, bbox = \
             torch.load(f"/tmp/.cache/{self.cfg.object_name}_motion_data.pt")
         self.splats["means"].data.copy_(points_init)
@@ -1275,7 +1285,9 @@ class Runner:
             weight = rbf_weight(distances, gamma=rbf_gamma)
 
         loss_fn = SmoothL1Loss(beta=0.1)
-        for i in tqdm(range(drag_iterations)):
+        
+        # change into until convergence
+        for i in tqdm(range(n_iter)):
             R = quaternion_to_matrix(F.normalize(q, dim=-1)).squeeze()  # (N, 3, 3)
             anchor_translated = anchor + t  # (N, 3)
 
@@ -1291,8 +1303,8 @@ class Runner:
             
             loss = (
                 coef_drag * loss_drag
-                + (1 - i / drag_iterations) * coef_arap_drag * loss_arap
-                + (1 - i / drag_iterations) * coef_group_arap * loss_group_arap
+                + max(0, 1 - 1.5 * i / n_iter) * coef_group_arap * loss_group_arap
+                + max(0, 1 - 1.5 * i / n_iter) * coef_arap_drag * loss_arap
             )
 
             loss.backward(retain_graph=True)
@@ -1312,7 +1324,7 @@ class Runner:
             )
             image_list.append(image_concat)
                 
-        output_path = f"/data2/wlsgur4011/GESI/output_drag/{self.cfg.object_name}_motion.mp4"
+        output_path = f"/data2/wlsgur4011/GESI/output_drag/motion_{self.cfg.object_name}.mp4"
         image_list_rewind = image_list + image_list[::-1]
         save_video(image_list_rewind, output_path, fps=60)
                 
@@ -1702,6 +1714,7 @@ class Runner:
             height=H,
             sh_degree=self.cfg.sh_degree,  # active all SH degrees
             radius_clip=3.0,  # skip GSs that have small image radius (in pixels)
+            interactive=True,
         )  # [1, H, W, 3]
         return render_colors[0].cpu().numpy()
 
@@ -1847,20 +1860,8 @@ if __name__ == "__main__":
     # cli(main, cfg, verbose=True)
 
     # Logger
-    if cfg.wandb:
-        if cfg.wandb_sweep:
-            wandb.agent(SWEEP_WHOLE_ID, function=lambda: run_all_data(cfg), count=30)
-        else:
-            wandb.init(
-                project="GESI",
-                dir="./wandb",
-                group=cfg.wandb_group,
-                name=cfg.object_name,
-                settings=wandb.Settings(start_method="fork"),
-                config=best_sweep_config,
-            )
-            main(0, 0, 1, cfg)
-
-        wandb.finish()
+    if cfg.wandb_sweep:
+        wandb.agent(SWEEP_WHOLE_ID, function=lambda: run_all_data(cfg), count=30)
     else:
-        print("wandb is needed for hyperparameter tuning")
+        main(0, 0, 1, cfg)
+

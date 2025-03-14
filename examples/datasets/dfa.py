@@ -7,7 +7,7 @@ import os
 from PIL import Image as PILImage
 
 
-def artemis_to_colmap(c2w):
+def dfa_to_colmap(c2w):
     c2w[2, :] *= -1  # flip whole world upside down
     # change deformation
     c2w = c2w[[1, 0, 2, 3], :]
@@ -25,8 +25,8 @@ def artemis_to_colmap(c2w):
     return qvec, tvec
 
 
-class SceneManagerArtemis:
-    def __init__(self, data_dir="/data/wlsgur4011/Artemis/beagle_dog", frame_idx=0):
+class SceneManagerDFA:
+    def __init__(self, data_dir="/data2/wlsgur4011/GESI/gsplat/data/DFA_procesed/beagle_dog/0"):
         self.data_dir = data_dir
         self.cameras = OrderedDict()
         self.images = OrderedDict()
@@ -35,27 +35,14 @@ class SceneManagerArtemis:
 
         self.width, self.height = self._get_image_resolution()
         self.intrinsics = self._load_intrinsics()
-        self.frame_idx = frame_idx
+        assert len(self.intrinsics) == 36
 
     def _get_image_resolution(self):
-        img_dir = os.path.join(self.data_dir, "img", "s1")
-        frame_dirs = sorted(
-            [d for d in os.listdir(img_dir) if os.path.isdir(os.path.join(img_dir, d))],
-            key=lambda x: int(x),
-        )
-        if not frame_dirs:
-            raise Exception("No frame directories found in img/s1 folder.")
-        first_frame_dir = os.path.join(img_dir, frame_dirs[0])
-        rgb_files = sorted(
-            [
-                f
-                for f in os.listdir(first_frame_dir)
-                if "alpha" not in f and f.lower().endswith(".png")
-            ]
-        )
+        img_dir = os.path.join(self.data_dir, "images")
+        rgb_files = sorted([f for f in os.listdir(img_dir) if f.endswith(".png")])
         if not rgb_files:
             raise Exception("No RGB image files found in the first frame folder.")
-        first_rgb_path = os.path.join(first_frame_dir, rgb_files[0])
+        first_rgb_path = os.path.join(img_dir, rgb_files[0])
         with PILImage.open(first_rgb_path) as im:
             width, height = im.size
         return width, height
@@ -93,7 +80,7 @@ class SceneManagerArtemis:
             self.cameras[new_cam_id] = camera
 
     def _load_extrinsics(self):
-        extrinsics_path = os.path.join(self.data_dir, "CamPose.inf")
+        extrinsics_path = os.path.join(self.data_dir, "Campose.inf")
         extrinsics_list = []
         with open(extrinsics_path, "r") as f:
             lines = [line.strip() for line in f.readlines() if line.strip() != ""]
@@ -108,28 +95,29 @@ class SceneManagerArtemis:
             mat_4x4[:3, 3] = mat_4x3[3, :]
             mat_4x4[3, :] = np.array([0, 0, 0, 1])
             extrinsics_list.append(mat_4x4)
+        
         return extrinsics_list
 
     def load_extrinsics(self):
         self.extrinsics_list = self._load_extrinsics()
-        img_dir = os.path.join(self.data_dir, "img", "s1")
-        frame_path = os.path.join(img_dir, str(self.frame_idx))
+        assert len(self.extrinsics_list) == 36
+        
         for view in range(36):
-            file_name = f"img_{view:04d}.png"
-            image_path = os.path.join(frame_path, file_name)
+            file_name = f"img_{view:04d}_rgba.png"
+            image_path = os.path.join(self.data_dir, "images", file_name)
             if not os.path.exists(image_path):
                 print(f"Warning: {image_path} does not exist.")
                 continue
             transform = self.extrinsics_list[view]
             if transform.shape == (4, 4):
-                qvec, tvec = artemis_to_colmap(transform)
+                qvec, tvec = dfa_to_colmap(transform)
                 q = Quaternion(qvec)
-                image = Image(image_path, view + 1, q, tvec)
+                image = Image(file_name, view + 1, q, tvec)
                 self.last_image_id += 1
                 self.images[self.last_image_id] = image
                 self.name_to_image_id[image_path] = self.last_image_id
 
-    def genrate_random_points3D(self, n=100000):
+    def genrate_random_points3D(self, n=10000):
         translation_list = np.empty((len(self.images), 3))
         for camera_id, image in self.images.items():
             translation = image.tvec
@@ -138,7 +126,7 @@ class SceneManagerArtemis:
         self.bbox = np.array(
             [np.min(translation_list, axis=0), np.max(translation_list, axis=0)]
         )
-        self.points3D = np.random.uniform(-1, 1, (n, 3))
+        self.points3D = np.random.uniform(-0.3, 0.3, (n, 3))
         self.point3D_colors = np.ones((n, 3), dtype=np.uint8) * 255
         self.point3D_errors = np.random.rand(n)
         self.point3D_id_to_images = {}
@@ -146,7 +134,7 @@ class SceneManagerArtemis:
 
 # Example usage
 if __name__ == "__main__":
-    manager = NewDataManager()
+    manager = SceneManagerDFA()
     manager.load_cameras()
     manager.load_extrinsics()
     manager.genrate_random_points3D()

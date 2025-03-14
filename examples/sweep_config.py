@@ -21,7 +21,7 @@ sweep_config = {
     },
 }
 
-best_sweep_config = EasyDict({
+best_config = EasyDict({
     "lr_q": 0.03,
     "lr_t": 0.03,
     "anchor_k": 9,
