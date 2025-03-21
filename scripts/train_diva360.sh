@@ -10,7 +10,7 @@ frame_index=$3
 
 CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
     --data_dir /data2/wlsgur4011/Diva360_data/3dgs_data/${object_name}_${frame_index}/ \
-    --result_dir ./results/${object_name}_${frame_index} \
+    --result_dir ./results/diva360/${object_name}_${frame_index} \
     --data_factor 1 \
     --data_name diva360 \
     --port 8081 \

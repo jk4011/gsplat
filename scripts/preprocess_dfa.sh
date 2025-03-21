@@ -1,4 +1,4 @@
-# bash prepocess_dfa.sh /data/wlsgur4011/DFA /data2/wlsgur4011/GESI/gsplat/data/DFA_processed
+# bash scripts/preprocess_dfa.sh /data/wlsgur4011/DFA /data2/wlsgur4011/GESI/gsplat/data/DFA_processed
 
 #!/bin/bash
 set -e        # exit when error
@@ -9,7 +9,7 @@ set -o xtrace # print command
 set -e        # exit when error
 set -o xtrace # print command
 
-# 인자 개수 체크
+
 if [ "$#" -ne 2 ]; then
     echo "Usage: $0 DATA_DIR OUTPUT_DIR"
     exit 1
@@ -18,67 +18,62 @@ fi
 DATA_DIR="$1"
 OUTPUT_DIR="$2"
 
-# 각 데이터 이름 (예: dog) 단위로 반복
+# 데이터 디렉토리 순회
 for datadir in "$DATA_DIR"/*; do
+
     if [ -d "$datadir" ]; then
         data_name=$(basename "$datadir")
-        # 원본의 Intrinsic.inf와 CamPose.inf 파일 경로
-        intrinsic_src="$datadir/Intrinsic.inf"
-        campose_src="$datadir/CamPose.inf"
-        
-        # $datadir/img/ 내의 모든 서브폴더에 대해 반복
-        for subfolder in "$datadir/img/"*; do
+        # img 폴더 아래의 모든 subfolder (예: s1) 순회
+        for subfolder in "$datadir"/img/*; do
             if [ -d "$subfolder" ]; then
-                echo "Processing subfolder: $(basename "$subfolder") in $data_name"
-                # 각 시퀀스 (예: 0, 1, …)에 대해 반복
-                for seqdir in "$subfolder"/*; do
-                    if [ -d "$seqdir" ]; then
-                        seq_name=$(basename "$seqdir")
-                        # seq_name이 숫자가 아니거나 10의 배수가 아니라면 건너뜀
-                        if ! [[ $seq_name =~ ^[0-9]+$ ]] || [ $((seq_name % 10)) -ne 0 ]; then
+                subfolder_name=$(basename "$subfolder")
+                # subfolder 내의 각 frame 폴더 순회
+                for frame_dir in "$subfolder"/*; do
+                    frame=$(basename "$frame_dir")
+                    # frame 이름이 숫자인지 확인
+                    if ! [[ "$frame" =~ ^[0-9]+$ ]]; then
+                        continue
+                    fi
+                    # 5 frame 간격으로 처리 (예: frame % 10 == 0 인 경우만)
+                    if (( frame % 5 != 0 )); then
+                        continue
+                    fi
+
+                    # 출력 경로 생성: OUTPUT_DIR/data_name/subfolder/frame
+                    dest_seq_dir="$OUTPUT_DIR/${data_name}_${subfolder_name}/$frame"
+                    mkdir -p "$dest_seq_dir/images"
+
+                    # frame 폴더 내의 이미지 파일 처리
+                    for img_file in "$frame_dir"/img_*.png; do
+                        if [[ "$img_file" == *_alpha.png ]]; then
                             continue
                         fi
-                        echo "Processing frame: $seq_name in subfolder $(basename "$subfolder") for $data_name"
-                        # 새 폴더 생성: OUTPUT_DIR/[data_name]/[seq]/images
-                        dest_img_dir="$OUTPUT_DIR/$data_name/$seq_name/images"
-                        mkdir -p "$dest_img_dir"
-                        dest_seq_dir="$OUTPUT_DIR/$data_name/$seq_name"
-                        mkdir -p "$dest_seq_dir"
-
-                        # 원본 이미지 폴더 안에서, _alpha가 없는 파일(즉, rgb 이미지) 처리
-                        for img_file in "$seqdir"/img_*.png; do
-                            if [[ "$img_file" == *_alpha.png ]]; then
-                                continue
-                            fi
-                            base=$(basename "$img_file")
-                            base_no_ext="${base%.png}"
-                            alpha_file="$seqdir/${base_no_ext}_alpha.png"
-
-                            if [ -f "$alpha_file" ]; then
-                                out_file="$dest_img_dir/${base_no_ext}_rgba.png"
-                                convert "$img_file" "$alpha_file" -alpha off -compose CopyOpacity -composite "$out_file"
-                            else
-                                echo "Warning: $alpha_file not found for $img_file"
-                            fi
-                        done
-
-                        # Intrinsic.inf 복사
-                        if [ -f "$intrinsic_src" ]; then
-                            cp "$intrinsic_src" "$dest_seq_dir/"
+                        base=$(basename "$img_file")
+                        base_no_ext="${base%.png}"
+                        alpha_file="$frame_dir/${base_no_ext}_alpha.png"
+                        if [ -f "$alpha_file" ]; then
+                            out_file="$dest_seq_dir/images/${base_no_ext}_rgba.png"
+                            convert "$img_file" "$alpha_file" -alpha off -compose CopyOpacity -composite "$out_file"
                         else
-                            echo "Warning: $intrinsic_src not found."
+                            echo "Warning: $alpha_file not found for $img_file"
                         fi
+                    done
 
-                        # CamPose.inf 복사 후, 이름을 Campose.inf로 변경
-                        if [ -f "$campose_src" ]; then
-                            cp "$campose_src" "$dest_seq_dir/Campose.inf"
-                        else
-                            echo "Warning: $campose_src not found."
-                        fi
+                    # Intrinsic.inf와 CamPose.inf 복사 (CamPose.inf는 Campose.inf로 이름 변경)
+                    intrinsic_src="$datadir/Intrinsic.inf"
+                    campose_src="$datadir/CamPose.inf"
+                    if [ -f "$intrinsic_src" ]; then
+                        cp "$intrinsic_src" "$dest_seq_dir/"
+                    else
+                        echo "Warning: $intrinsic_src not found."
+                    fi
+                    if [ -f "$campose_src" ]; then
+                        cp "$campose_src" "$dest_seq_dir/Campose.inf"
+                    else
+                        echo "Warning: $campose_src not found."
                     fi
                 done
             fi
         done
     fi
 done
-
