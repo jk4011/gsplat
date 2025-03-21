@@ -217,7 +217,7 @@ class Config:
 
     single_finetune: bool = False
 
-    cam_idx: bool = 0
+    cam_idx: int = 0
 
     wandb: bool = False
 
@@ -951,8 +951,8 @@ class Runner:
         # get haraparameter
         n_anchor             = self.hpara.n_anchor
         coef_drag            = self.hpara.coef_drag
-        coef_arap_drag       = self.hpara.coef_arap_drag * 3
-        coef_group_arap      = self.hpara.coef_group_arap * 3
+        coef_arap_drag       = self.hpara.coef_arap_drag
+        coef_group_arap      = self.hpara.coef_group_arap
         coef_arap_drag       = self.hpara.coef_arap_drag
         coef_arap_rgb        = self.hpara.coef_arap_rgb
         coef_drag            = self.hpara.coef_drag
@@ -962,6 +962,7 @@ class Runner:
         reprojection_error   = self.hpara.reprojection_error
         anchor_k             = self.hpara.anchor_k
         rbf_gamma            = self.hpara.rbf_gamma
+        cycle_threshold      = self.hpara.cycle_threshold
         
         points_init = self.splats["means"].clone().detach()
         quats_init = self.splats["quats"].clone().detach()
@@ -979,7 +980,7 @@ class Runner:
                 return_rgba=True
             )
             drag_source, drag_target, bbox = get_drag_roma(
-                image_source, image_target, device=self.device
+                image_source, image_target, device=self.device, cycle_threshold=cycle_threshold
             )
             H = image_source.shape[1]
             W = image_source.shape[2]
@@ -1001,7 +1002,7 @@ class Runner:
             filtered_points_2d = points_2d[points_mask]
 
             distances, nearest_indices = knn_jh(
-                filtered_points_2d.detach(), drag_source.detach(), k=1
+                filtered_points_2d.detach(), drag_source.detach(), k=1, is_sklearn=True
             )
 
             distances = distances.squeeze()
@@ -1073,7 +1074,8 @@ class Runner:
         ##########################################################
         #################### 4. rigid grouping ###################
         ##########################################################
-
+        from jhutil import color_log; color_log(4444, "rigid grouping")
+    
         groups, outliers, group_trans = local_rigid_grouping(
             points_3d_filtered,
             drag_target_filtered,
@@ -1100,8 +1102,8 @@ class Runner:
         ##########################################################
         #################### 5. drag optimize ####################
         ##########################################################
+        from jhutil import color_log; color_log(5555, "drag optimize ")
         
-        from jhutil import color_log; color_log(4444, "drag optimize ")
         with torch.no_grad():
             distances, indices_knn = knn_jh(anchor, anchor, k=anchor_k)
             weight = rbf_weight(distances, gamma=rbf_gamma)
@@ -1180,7 +1182,7 @@ class Runner:
         torch.save([points_init, quats_init, anchor, R, t.detach(), anchor_group_id, bbox], f"/tmp/.cache/{self.cfg.object_name}_motion_data.pt")
         
         ##########################################################
-        #################### 5. rgb optimize #####################
+        #################### 6. rgb optimize #####################
         ##########################################################
         if not rgb_optimize:
             return
@@ -1554,7 +1556,7 @@ class Runner:
                 _, img1, img2 = crop_two_image_with_background(colors_p[0], pixels_p[0])
                 img_diff_list.append(get_img_diff(img1, img2))
 
-                if max(metrics["psnr"]) == metrics["psnr"][-1]:
+                if not self.cfg.single_finetune and max(metrics["psnr"]) == metrics["psnr"][-1]:
                     splats = self.splats.state_dict()
                     splats = cluster_largest(splats)
                     ckpt = {"step": step, "splats": splats, "clustered": True}
@@ -1763,49 +1765,114 @@ all_psnr_for_sweep = {}
 
 
 def run_all_data(cfg: Config):
-    
-    image_indices = {
-        "bunny" : ("0000", "1000"),
-        "dog" : ("0177", "0279"),
-        # "horse" : ("0120", "0375"),
-        "k1_double_punch" : ("0000", "0555"),
-        "k1_hand_stand" : ("0000", "0300"),
-        "k1_push_up" : ("0370", "0398"),
-        "penguin" : ("0217", "0239"),
-        "trex" : ("0100", "0300"),
-        "truck" : ("0078", "0171"),
-        "wall_e" : ("0222", "0285"),
-        "wolf" : ("0000", "2393"),
-    }
-    for object_name, (index_from, index_to) in image_indices.items():
-        
-        data_dir = f"/data2/wlsgur4011/Diva360_data/3dgs_data/{object_name}_{index_to}/"
-        ckpt = [f"./results/{object_name}_{index_from}/ckpts/ckpt_best_psnr.pt"]
-        result_dir = f"./results/{object_name}_sweep"
-        cfg.result_dir = result_dir
-        cfg.object_name = object_name
-        cfg.data_dir = data_dir
-        cfg.ckpt = ckpt
-        
-        runner = Runner(0, 0, 1, cfg)
+    if cfg.data_name == "DFA":
+        image_indices = {
+            ("beagle_dog", "s1_24fps"): {"16": [[190, 195], [80, 85]], "32": [[250, 260]]},
+            ("beagle_dog", "s1"): {"16": [[520, 525], [170, 175]], "32": [[50, 110]]},
+            ("bear", "run"): {"16": [[5, 10]], "32": [[5, 10]]},
+            ("bear", "walk"): {"16": [[110, 140]], "24": [[125, 200]], "32": [[140, 145]]},
+            ("cat", "run"): {"32": [[25, 30]] * 2},
+            ("cat", "walk_final"): {"32": [[10, 20]] * 2},
+            ("cat", "walkprogressive_noz"): {"32": [[165, 210], [25, 30]]},
+            ("cat", "walksniff"): {"32": [[60, 75]] * 2},
+            ("duck", "eat_grass"): {"16": [[50, 90],], "24": [[0, 10], [165, 295]], "32": [[5, 15]]},
+            ("duck", "swim"): {"16": [[160, 190]], "24": [[205, 225]], "32": [[200, 215]]},
+            ("duck", "walk"): {"16": [[200, 230]], "24": [[120, 135]], "32": [[0, 50]]},
+            ("fox", "attitude"): {"32": [[65, 70], [90, 145]]},
+            ("fox", "run"): {"32": [[25, 30],] * 2},
+            ("fox", "walk"): {"24": [[70, 75]] * 2},
+            ("lion", "Run"): {"24": [[50, 55]], "32": [[30, 35], [50, 55],]}, 
+            ("lion", "Walk"): {"32": [[30, 35]] * 2},
+            ("whiteTiger", "roaringwalk"): {"32": [[15, 25]] * 2},
+            ("whiteTiger", "run"): {"32": [[70, 80]] * 2},
+            ("wolf", "Damage"): {"16": [[10, 90]], "24": [[60, 70]], "32": [[0, 110]]},
+            ("wolf", "Howling"): {"16": [[0, 90]], "24": [[10, 60], [5, 65], [60, 170]]},
+            ("wolf", "Run"): {"16": [[20, 25]], "24": [[35, 40], [30, 35],], "32": [[20, 25], [35, 40]]},
+            ("wolf", "Walk"): {"16": [[85, 95]], "24": [[70, 80]], "32": [[70, 80]]},
+        }
+        for name, sub_name in image_indices.keys():
+            index_dict = image_indices[(name, sub_name)]
+            for cam_idx, pair_list in index_dict.items():
+                
+                for index_from, index_to in pair_list:
+                    
+                    object_name = f"{name}({sub_name})"
+                    data_dir = f"/data2/wlsgur4011/GESI/gsplat/data/DFA_processed/{object_name}/{index_to}"
+                    result_dir = f"./results/dfa/{object_name}_sweep"
+                    ckpt = [f"./results/dfa/{object_name}_{index_from}/ckpts/ckpt_best_psnr.pt"]
+                    
+                    cfg.result_dir = result_dir
+                    cfg.object_name = f"{object_name}_[{index_from},{index_to}]"
+                    cfg.data_dir = data_dir
+                    cfg.ckpt = ckpt
+                    cfg.cam_idx = int(cam_idx)
+                    
+                    runner = Runner(0, 0, 1, cfg)
 
-        if cfg.ckpt is not None:
-            # run eval only
-            ckpts = [
-                torch.load(file, map_location=runner.device, weights_only=True)
-                for file in cfg.ckpt
-            ]
-            for k in runner.splats.keys():
-                runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
-            step = ckpts[0]["step"]
-            # runner.eval(step=step)
-            # runner.render_traj(step=step)
-            if cfg.compression is not None:
-                runner.run_compression(step=step)
-            if cfg.single_finetune:
-                runner.train_drag()
-        else:
-            runner.train()
+                    if cfg.ckpt is not None:
+                        ckpts = [
+                            torch.load(file, map_location=runner.device, weights_only=True)
+                            for file in cfg.ckpt
+                        ]
+                        for k in runner.splats.keys():
+                            runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
+                        step = ckpts[0]["step"]
+                        # runner.eval(step=step)
+                        # runner.render_traj(step=step)
+                        if cfg.compression is not None:
+                            runner.run_compression(step=step)
+                        if cfg.single_finetune:
+                            runner.train_drag()
+                    else:
+                        runner.train()
+
+        psnr_mean = np.mean(list(all_psnr_for_sweep.values()))
+        wandb.log(all_psnr_for_sweep)
+        wandb.log({"psnr_mean": psnr_mean})
+    
+    elif cfg.data_name == "diva360":
+        image_indices = {
+            "bunny" : ("0000", "1000"),
+            "dog" : ("0177", "0279"),
+            # "horse" : ("0120", "0375"),
+            "k1_double_punch" : ("0000", "0555"),
+            "k1_hand_stand" : ("0000", "0300"),
+            "k1_push_up" : ("0370", "0398"),
+            "penguin" : ("0217", "0239"),
+            "trex" : ("0100", "0300"),
+            "truck" : ("0078", "0171"),
+            "wall_e" : ("0222", "0285"),
+            "wolf" : ("0000", "2393"),
+        }
+        for object_name, (index_from, index_to) in image_indices.items():
+            
+            data_dir = f"/data2/wlsgur4011/Diva360_data/3dgs_data/{object_name}_{index_to}/"
+            ckpt = [f"./results/{object_name}_{index_from}/ckpts/ckpt_best_psnr.pt"]
+            result_dir = f"./results/diva360/{object_name}_sweep"
+            cfg.result_dir = result_dir
+            cfg.object_name = object_name
+            cfg.data_dir = data_dir
+            cfg.ckpt = ckpt
+            
+            runner = Runner(0, 0, 1, cfg)
+
+            if cfg.ckpt is not None:
+                # run eval only
+                ckpts = [
+                    torch.load(file, map_location=runner.device, weights_only=True)
+                    for file in cfg.ckpt
+                ]
+                for k in runner.splats.keys():
+                    runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
+                step = ckpts[0]["step"]
+                # runner.eval(step=step)
+                # runner.render_traj(step=step)
+                if cfg.compression is not None:
+                    runner.run_compression(step=step)
+                if cfg.single_finetune:
+                    runner.train_drag()
+            else:
+                runner.train()
 
     psnr_mean = np.mean(list(all_psnr_for_sweep.values()))
     wandb.log(all_psnr_for_sweep)

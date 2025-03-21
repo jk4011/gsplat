@@ -14,7 +14,7 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
     --result_dir ./results/${object_name}_finetune \
     --ckpt ./results/${object_name}_${index_from}/ckpts/ckpt_best_psnr.pt \
     --data_factor 1 \
-    --no_colmap \
+    --data_name DFA \
     --single_finetune \
     --port 8081 \
     --scale_reg 0.1 \
