@@ -35,7 +35,7 @@ class SceneManagerDFA:
 
         self.width, self.height = self._get_image_resolution()
         self.intrinsics = self._load_intrinsics()
-        assert len(self.intrinsics) == 36
+        self.n_cameras = len(self.intrinsics)
 
     def _get_image_resolution(self):
         img_dir = os.path.join(self.data_dir, "images")
@@ -100,9 +100,9 @@ class SceneManagerDFA:
 
     def load_extrinsics(self):
         self.extrinsics_list = self._load_extrinsics()
-        assert len(self.extrinsics_list) == 36
+        assert len(self.extrinsics_list) == self.n_cameras
         
-        for view in range(36):
+        for view in range(self.n_cameras):
             file_name = f"img_{view:04d}_rgba.png"
             image_path = os.path.join(self.data_dir, "images", file_name)
             if not os.path.exists(image_path):
@@ -126,8 +126,8 @@ class SceneManagerDFA:
         self.bbox = np.array(
             [np.min(translation_list, axis=0), np.max(translation_list, axis=0)]
         )
-        self.points3D = np.random.uniform(-0.3, 0.3, (n, 3))
-        self.point3D_colors = np.ones((n, 3), dtype=np.uint8) * 255
+        self.points3D = np.random.uniform(-0.5, 0.5, (n, 3))
+        self.point3D_colors = np.ones((n, 3), dtype=np.uint8) * 50
         self.point3D_errors = np.random.rand(n)
         self.point3D_id_to_images = {}
 

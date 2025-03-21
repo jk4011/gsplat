@@ -71,7 +71,7 @@ class SceneManagerDiva360:
 
                 self.last_image_id = max(self.last_image_id, camera_id)
 
-    def genrate_random_points3D(self, n=100000):
+    def genrate_random_points3D(self, n=5000):
         translation_list = np.empty((len(self.images), 3))
         for camera_id, image in self.images.items():
             translation = image.tvec

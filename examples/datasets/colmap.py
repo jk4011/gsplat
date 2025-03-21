@@ -327,6 +327,7 @@ class Dataset:
         patch_size: Optional[int] = None,
         load_depths: bool = False,
         single_finetune: bool = False,
+        cam_idx: int = 0,
     ):
         self.parser = parser
         self.split = split
@@ -336,14 +337,14 @@ class Dataset:
         
         if single_finetune:
             if split == "train":
-                self.indices = indices[indices == 0]
+                self.indices = indices[indices == cam_idx]
             else:
-                self.indices = indices[indices != 0]
+                self.indices = indices[indices != cam_idx]
         else:
             if split == "train":
-                self.indices = indices[indices % self.parser.test_every != 0]
+                self.indices = indices[indices % self.parser.test_every != 4]
             else:
-                self.indices = indices[indices % self.parser.test_every == 0]
+                self.indices = indices[indices % self.parser.test_every == 4]
 
     def __len__(self):
         return len(self.indices)

@@ -161,7 +161,7 @@ def image_path_to_tensor(image_path: Path):
 def main(
     height: int = 256,
     width: int = 256,
-    num_points: int = 100000,
+    num_points: int = 10000,
     save_imgs: bool = True,
     img_path: Optional[Path] = None,
     iterations: int = 1000,

@@ -217,7 +217,7 @@ class Config:
 
     single_finetune: bool = False
 
-    finetuning_drot: bool = False
+    cam_idx: bool = 0
 
     wandb: bool = False
 
@@ -377,6 +377,7 @@ class Runner:
             patch_size=cfg.patch_size,
             load_depths=cfg.depth_loss,
             single_finetune=cfg.single_finetune,
+            cam_idx=cfg.cam_idx,
         )
         self.valset = Dataset(
             self.parser, split="val", single_finetune=cfg.single_finetune
@@ -511,7 +512,7 @@ class Runner:
 
         if cfg.wandb_sweep:
             wandb.init(
-                project="GESI",
+                project=f"GESI_{cfg.data_name}",
                 dir="./wandb",
                 group=cfg.wandb_group,
                 name=cfg.object_name,
@@ -520,7 +521,7 @@ class Runner:
             self.hpara = wandb.config
         elif cfg.wandb:
             wandb.init(
-                project="GESI",
+                project=f"GESI_{cfg.data_name}",
                 dir="./wandb",
                 group=cfg.wandb_group,
                 name=cfg.object_name,
@@ -532,9 +533,9 @@ class Runner:
             self.hpara = best_config
         
         if cfg.data_name == "DFA":
-            self.backgrounds = torch.ones(1, 3, device=self.device)
+            self.backgrounds = torch.ones(1, 3, device=self.device)   # white
         else:
-            self.backgrounds = torch.zeros(1, 3, device=self.device)
+            self.backgrounds = torch.zeros(1, 3, device=self.device)  # black
 
     def rasterize_splats(
         self,
@@ -986,7 +987,7 @@ class Runner:
         ##########################################################
         ############### 2. filter points and drag  ###############
         ##########################################################
-        from jhutil import color_log; color_log(2222, "filter points and drag")
+        from jhutil import color_log; color_log(2222, "filter points and start drag")
         points_3d = self.splats.means.clone().detach()
         points_3d.requires_grad = True
 
@@ -1554,8 +1555,10 @@ class Runner:
                 img_diff_list.append(get_img_diff(img1, img2))
 
                 if max(metrics["psnr"]) == metrics["psnr"][-1]:
-                    splat = {"step": step, "splats": self.splats.state_dict()}
-                    torch.save(splat, f"{self.ckpt_dir}/ckpt_best_psnr.pt")
+                    splats = self.splats.state_dict()
+                    splats = cluster_largest(splats)
+                    ckpt = {"step": step, "splats": splats, "clustered": True}
+                    torch.save(ckpt, f"{self.ckpt_dir}/ckpt_best_psnr.pt")
 
                 metrics["ssim"].append(self.ssim(colors_p, pixels_p))
                 metrics["lpips"].append(self.lpips(colors_p, pixels_p))
@@ -1733,6 +1736,9 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             torch.load(file, map_location=runner.device, weights_only=True)
             for file in cfg.ckpt
         ]
+        for i, ckpt in enumerate(ckpts):
+            if "clustered" not in ckpt:
+                ckpts[i]["splats"] = cluster_largest(ckpts[i]["splats"])
         for k in runner.splats.keys():
             runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
         step = ckpts[0]["step"]
@@ -1797,10 +1803,7 @@ def run_all_data(cfg: Config):
             if cfg.compression is not None:
                 runner.run_compression(step=step)
             if cfg.single_finetune:
-                if cfg.finetuning_drot:
-                    runner.train_drot()
-                else:
-                    runner.train_drag()
+                runner.train_drag()
         else:
             runner.train()
 
