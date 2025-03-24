@@ -954,11 +954,8 @@ class Runner:
         n_anchor_list        = self.hpara.n_anchor_list
         coef_drag            = self.hpara.coef_drag
         coef_arap_drag       = self.hpara.coef_arap_drag
-        if self.cfg.without_group:
-            coef_group_arap  = 0
-        else :
-            coef_group_arap  = self.hpara.coef_group_arap
-        coef_arap_rgb        = self.hpara.coef_arap_rgb
+        coef_group_arap      = 0 if self.cfg.without_group else self.hpara.coef_group_arap
+        coef_rgb             = self.hpara.coef_rgb
         coef_drag            = self.hpara.coef_drag
         lr_q                 = self.hpara.lr_q
         lr_t                 = self.hpara.lr_t
@@ -967,6 +964,7 @@ class Runner:
         anchor_k             = self.hpara.anchor_k
         rbf_gamma            = self.hpara.rbf_gamma
         cycle_threshold      = self.hpara.cycle_threshold
+        decay_rate           = self.hpara.decay_rate
         
         points_init = self.splats["means"].clone().detach()
         quats_init = self.splats["quats"].clone().detach()
@@ -1139,11 +1137,13 @@ class Runner:
             points_lbs_filtered = points_lbs[points_mask]
             points_lbs_filtered_2d, _ = self.project_to_2d(points_lbs_filtered)
             loss_drag = drag_loss(points_lbs_filtered_2d, drag_target_filtered)
+            loss_rgb = self.render_and_calc_rgb_loss() if i > 300 else 0
 
             loss = (
-                coef_drag * loss_drag
+                (decay_rate ** i * coef_drag) * loss_drag
                 + coef_arap_drag * loss_arap
                 + coef_group_arap * loss_group_arap
+                + coef_rgb * loss_rgb
             )
 
             loss.backward(retain_graph=True)
@@ -1182,40 +1182,6 @@ class Runner:
         if self.cfg.motion_video:
             self.make_motion_video(points_init.detach(), quats_init.detach(), anchor_all.detach(), R.detach(), t_all.detach(), anchor_group_id, bbox)
         
-        ##########################################################
-        #################### 6. rgb optimize #####################
-        ##########################################################
-        if not rgb_optimize:
-            return
-
-        from jhutil import color_log; color_log(6666, "rgb optimize")
-
-        points_origin = self.splats["means"].clone().detach()
-        quats_origin = F.normalize(self.splats["quats"].clone().detach(), dim=-1)
-        quats_origin_invert = quaternion_invert(quats_origin)
-        with torch.no_grad():
-            distances, indices_knn = knn_jh(points_origin, points_origin, k=5)
-            weight = rbf_weight(distances, gamma=30)
-
-        for i in tqdm(range(rgb_iteration)):
-            quats_current = F.normalize(self.splats["quats"], dim=-1)
-            quats_all = quaternion_multiply(quats_current, quats_origin_invert)
-            R = quaternion_to_matrix(quats_all).squeeze()  # (N, 3, 3)
-            points_now = self.splats["means"]
-            loss_arap = arap_loss(points_origin, points_now, R, weight, indices_knn)
-            loss_rgb = self.render_and_calc_rgb_loss()
-
-            loss = coef_arap_rgb * loss_arap + loss_rgb
-            loss.backward()
-
-            for var_name in ["means", "quats"]:
-                optimizer = self.optimizers[var_name]
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
-
-        if not self.cfg.skip_eval:
-            step += rgb_iteration
-            self.eval(step=step)
 
     def make_motion_video(self, points_init, quats_init, anchor, R_goal, t_goal, anchor_group_id, bbox, n_iter=500):
         

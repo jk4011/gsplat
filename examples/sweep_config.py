@@ -1,17 +1,29 @@
 import wandb
 from easydict import EasyDict
 
-SWEEP_WHOLE_ID = "jh11/GESI_sweep/9w0ul3z0"
+SWEEP_WHOLE_ID = "jh11/GESI_sweep/m86h7dkn"
 
 sweep_config = {
     "method": "bayes",  # grid, random, bayes 중 선택
     "metric": {"name": "psnr_mean", "goal": "maximize"},
     "parameters": {
-        "n_anchor"             : {"values": [100, 200, 300, 400, 500]},
+        "n_anchor_list" : {"values": [
+            [200, 250, 300, 350, 400],
+            [100, 200, 300, 400, 500],
+            [150, 350, 500, 700, 1000],
+            [200, 400, 600, 800, 1000],
+            [300, 400, 500, 700, 1000],
+            [100, 200, 500, 1000, 2000],
+            [300, 400, 500, 1000, 2000],
+            [400, 600, 800, 1000, 2000],
+            [300, 500, 1000, 2000, 3000],
+            [300, 500, 1000, 2000, 5000],
+        ]},
+        "decay_rate"           : {"values": [0.99, 0.995, 0.997, 0.999]},
         "coef_drag"            : {"values": [0.3, 0.5, 1, 1.5, 2]},
         "coef_arap_drag"       : {"values": [5e2, 1e3, 2e3, 3e3, 5e3, 1e4]},
         "coef_group_arap"      : {"values": [1e3, 2e3, 3e3, 1e4, 2e4, 3e4]},
-        "coef_arap_rgb"        : {"values": [1]},
+        "coef_rgb"             : {"values": [0.01, 0.2, 0.5, 1, 2, 5]},
         "coef_drag_3d"         : {"values": [3000]},
         "lr_q"                 : {"values": [1e-2, 2e-2, 3e-2, 5e-2, 1e-1]},
         "lr_t"                 : {"values": [1e-2, 2e-2, 3e-2, 5e-2, 1e-1]},
@@ -25,6 +37,7 @@ sweep_config = {
 
 best_config_dict = EasyDict({
     "DFA": {
+        "decay_rate": 0.995,
         "lr_q": 0.03,
         "lr_t": 0.01,
         "anchor_k": 9,
@@ -33,7 +46,7 @@ best_config_dict = EasyDict({
         "coef_drag_3d": 3000,
         "rbf_gamma": 70,
         "rigidity_k": 50,
-        "coef_arap_rgb": 1,
+        "coef_rgb": 0,
         "coef_arap_drag": 2000,
         "coef_group_arap": 20000,
         "cycle_threshold": 20,
@@ -48,7 +61,7 @@ best_config_dict = EasyDict({
         "coef_drag_3d": 3000,
         "rbf_gamma": 50,
         "rigidity_k": 40,
-        "coef_arap_rgb": 1,
+        "coef_rgb": 1,
         "coef_arap_drag": 3000,
         "reprojection_error": 5,
         "coef_group_arap": 3000,
@@ -74,6 +87,6 @@ def print_best_sweep_config(sweep_full_id):
 
 
 if __name__ == "__main__":
-    # print_new_sweep_id(sweep_config, project_name="GESI_sweep")
-    print_best_sweep_config(SWEEP_WHOLE_ID)
+    print_new_sweep_id(sweep_config, project_name="GESI_sweep")
+    # print_best_sweep_config(SWEEP_WHOLE_ID)
 
