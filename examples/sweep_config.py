@@ -27,7 +27,7 @@ best_config_dict = EasyDict({
     "DFA": {
         "lr_q": 0.03,
         "lr_t": 0.01,
-        "anchor_k": 12,
+        "anchor_k": 9,
         "n_anchor": 300,
         "coef_drag": 0.5,
         "coef_drag_3d": 3000,
