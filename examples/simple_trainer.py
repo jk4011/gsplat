@@ -939,7 +939,7 @@ class Runner:
         rgb_iteration=500,
         filter_distance=1,
         is_eval=True,
-        is_save_video=True,
+        is_save_video=False,
         rgb_optimize=False,
     ) -> None:
         if is_eval:
