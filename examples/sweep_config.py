@@ -37,7 +37,7 @@ best_config_dict = EasyDict({
         "coef_arap_drag": 2000,
         "coef_group_arap": 20000,
         "cycle_threshold": 20,
-        "reprojection_error": 6
+        "reprojection_error": 6,
     },
     "diva360": {
         "lr_q": 0.03,

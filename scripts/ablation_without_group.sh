@@ -24,5 +24,4 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
     --wandb \
     --wandb_group ${version} \
     --disable_viewer \
-    --skip_eval \
-    --motion_video \
+    --without_group \

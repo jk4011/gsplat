@@ -81,7 +81,7 @@ import warnings
 import torch_fpsample
 from sweep_config import sweep_config, best_config_dict, SWEEP_WHOLE_ID
 from gesi.rigid_grouping import local_rigid_grouping, naive_rigid_grouping
-from jhutil import save_video
+from jhutil import motion_video
 from torch.nn import SmoothL1Loss
 
 warnings.simplefilter("ignore")
@@ -226,6 +226,12 @@ class Config:
     wandb_group: str = None
 
     wandb_sweep: bool = False
+    
+    without_group: bool = False
+    
+    motion_video: bool = False
+    
+    skip_eval: bool = False
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -938,11 +944,9 @@ class Runner:
         drag_iterations=500,
         rgb_iteration=500,
         filter_distance=1,
-        is_eval=True,
-        is_save_video=False,
         rgb_optimize=False,
     ) -> None:
-        if is_eval:
+        if not self.cfg.skip_eval:
             step = 0
             self.eval(step=step)
 
@@ -950,7 +954,10 @@ class Runner:
         n_anchor             = self.hpara.n_anchor
         coef_drag            = self.hpara.coef_drag
         coef_arap_drag       = self.hpara.coef_arap_drag
-        coef_group_arap      = self.hpara.coef_group_arap
+        if self.cfg.without_group:
+            coef_group_arap  = 0
+        else :
+            coef_group_arap  = self.hpara.coef_group_arap
         coef_arap_rgb        = self.hpara.coef_arap_rgb
         coef_drag            = self.hpara.coef_drag
         lr_q                 = self.hpara.lr_q
@@ -1152,12 +1159,12 @@ class Runner:
                     )
                 
 
-        if is_eval:
+        if not self.cfg.skip_eval:
             step += drag_iterations
             self.eval(step=step)
 
         # data for motion
-        if is_save_video:
+        if self.cfg.motion_video:
             self.make_motion_video(points_init.detach(), quats_init.detach(), anchor.detach(), R.detach(), t.detach(), anchor_group_id, bbox)
         
         ##########################################################
@@ -1191,21 +1198,21 @@ class Runner:
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
 
-        if is_eval:
+        if not self.cfg.skip_eval:
             step += rgb_iteration
             self.eval(step=step)
 
-    def make_motion_video(self, points_init, quats_init, anchor, R_goal, t_goal, anchor_group_id, bbox, n_iter=300):
+    def make_motion_video(self, points_init, quats_init, anchor, R_goal, t_goal, anchor_group_id, bbox, n_iter=500):
         
         self.splats["means"].data.copy_(points_init.detach())
         self.splats["quats"].data.copy_(quats_init.detach())
         
         # get haraparameter
         coef_drag            = self.hpara.coef_drag_3d
-        coef_group_arap      = self.hpara.coef_group_arap
-        coef_arap_drag       = self.hpara.coef_arap_drag
-        lr_q                 = self.hpara.lr_q * 0.05
-        lr_t                 = self.hpara.lr_t * 0.05
+        coef_group_arap      = self.hpara.coef_group_arap * 0.5
+        coef_arap_drag       = self.hpara.coef_arap_drag * 0.5
+        lr_q                 = self.hpara.lr_q * 0.02
+        lr_t                 = self.hpara.lr_q * 0.02
         anchor_k             = self.hpara.anchor_k
         rbf_gamma            = self.hpara.rbf_gamma
         
@@ -1279,18 +1286,18 @@ class Runner:
                 image_source, image_target = self.fetch_comparable_two_image()
 
             w_from, h_from, w_to, h_to = bbox
-            image_source = image_source[:, h_from:h_to, w_from:w_to]
-            image_target = image_target[:, h_from:h_to, w_from:w_to]
+            image_source = image_source[:, h_from-5:h_to+5, w_from-10:w_to]
+            image_target = image_target[:, h_from-5:h_to+5, w_from-10:w_to]
             if i == 0:
                 image_list = []
             image_concat = torch.cat(
                 [image_source.squeeze(), image_target.squeeze()], dim=1
             )
-            image_list.append(image_concat)
+            image_list.append(image_concat.cpu())
                 
-        output_path = f"/data2/wlsgur4011/GESI/output_drag/motion_{self.cfg.object_name}.mp4"
+        output_path = f"/data2/wlsgur4011/GESI/output_video/{self.cfg.data_name}/motion_{self.cfg.object_name}.mp4"
         image_list_rewind = image_list + image_list[::-1]
-        save_video(image_list_rewind, output_path, fps=60)
+        motion_video(image_list_rewind[::4], output_path, fps=60)
                 
 
     def project_to_2d(self, points):

@@ -20,7 +20,7 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
     --cam_idx $cam_idx \
     --port 8081 \
     --scale_reg 0.1 \
-    --object_name ${object_name}_[$index_from,$index_to] \
+    --object_name ${object_name}_[$index_from,$index_to]_$cam_idx \
     --wandb \
     --wandb_group ${version} \
     --disable_viewer \
