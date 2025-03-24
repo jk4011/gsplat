@@ -951,7 +951,7 @@ class Runner:
             self.eval(step=step)
 
         # get haraparameter
-        n_anchor             = self.hpara.n_anchor
+        n_anchor_list        = self.hpara.n_anchor_list
         coef_drag            = self.hpara.coef_drag
         coef_arap_drag       = self.hpara.coef_arap_drag
         if self.cfg.without_group:
@@ -1053,25 +1053,25 @@ class Runner:
         from jhutil import color_log; color_log(3333, "initialize anchor and optimizer")
 
         # anchor = voxelize_pointcloud_and_get_means(points_3d, voxel_size=0.05)
-        anchor, anchor_indice = torch_fpsample.sample(points_3d.cpu(), n_anchor)
+        anchor_all, anchor_indice_all = torch_fpsample.sample(points_3d.cpu(), n_anchor_list[-1])
 
-        anchor = anchor.to(self.device)
+        anchor_all = anchor_all.to(self.device)
 
-        data_all = [anchor, anchor_indice, points_mask, drag_mask, points_2d, drag_target, drag_source, image_target, image_source, points_3d, self.data["K"]]
+        data_all = [anchor_all, anchor_indice_all, points_mask, drag_mask, points_2d, drag_target, drag_source, image_target, image_source, points_3d, self.data["K"]]
         torch.save(data_all, f"/tmp/.cache/data_all_{self.cfg.object_name}.pt")
 
-        N = anchor.shape[0]
+        N = anchor_all.shape[0]
         q_init = torch.tensor([1, 0, 0, 0], dtype=torch.float32, device=self.device)
         q_init = q_init.unsqueeze(0).repeat(N, 1, 1)
         t_init = torch.zeros((N, 3), dtype=torch.float32, device=self.device)
 
-        q = nn.Parameter(q_init)  # (N, 3, 3)
-        t = nn.Parameter(t_init)  # (N, 3)
+        quats_all = nn.Parameter(q_init)  # (N, 3, 3)
+        t_all = nn.Parameter(t_init)  # (N, 3)
 
         anchor_optimizer = torch.optim.Adam(
             [
-                {"params": q, "lr": lr_q},
-                {"params": t, "lr": lr_t},
+                {"params": quats_all, "lr": lr_q},
+                {"params": t_all, "lr": lr_t},
             ]
         )
 
@@ -1101,20 +1101,29 @@ class Runner:
             points_3d.shape[0], dtype=torch.long, device=self.device
         )
         group_id_all[points_mask] = groud_id
-        anchor_group_id = group_id_all[anchor_indice]
 
         ##########################################################
         #################### 5. drag optimize ####################
         ##########################################################
         from jhutil import color_log; color_log(5555, "drag optimize ")
         
-        with torch.no_grad():
-            distances, indices_knn = knn_jh(anchor, anchor, k=anchor_k)
-            weight = rbf_weight(distances, gamma=rbf_gamma)
         quats_origin = F.normalize(self.splats["quats"].clone().detach(), dim=-1)
         
         for i in tqdm(range(drag_iterations)):
-            R = quaternion_to_matrix(F.normalize(q, dim=-1)).squeeze()  # (N, 3, 3)
+            
+            n_anchor = n_anchor_list[i // 100]
+            t = t_all[:n_anchor]
+            quats = quats_all[:n_anchor]
+            
+            anchor = anchor_all[:n_anchor]
+            anchor_indice = anchor_indice_all[:n_anchor]
+            anchor_group_id = group_id_all[anchor_indice]
+            
+            with torch.no_grad():
+                distances, indices_knn = knn_jh(anchor, anchor, k=anchor_k)
+                weight = rbf_weight(distances, gamma=rbf_gamma)
+            
+            R = quaternion_to_matrix(F.normalize(quats, dim=-1)).squeeze()  # (N, 3, 3)
             anchor_translated = anchor + t  # (N, 3)
 
             loss_arap = arap_loss(anchor, anchor_translated, R, weight, indices_knn)
@@ -1141,6 +1150,13 @@ class Runner:
             anchor_optimizer.step()
             anchor_optimizer.zero_grad()
 
+            if i % 100 == 0:
+                quats_all_lbs = quats_lbs[anchor_indice_all][:, None, :]
+                t_all_lbs = (points_lbs - points_3d)[anchor_indice_all]
+                
+                quats_all.data[n_anchor:] = quats_all_lbs[n_anchor:].detach()
+                t_all.data[n_anchor:] = t_all_lbs[n_anchor:].detach()
+                
             if wandb.run and not cfg.wandb_sweep:
                 wandb.log({"loss_arap": loss_arap, "loss_drag": loss_drag, "loss_group_arap": loss_group_arap}, step=i)
 
@@ -1160,12 +1176,11 @@ class Runner:
                 
 
         if not self.cfg.skip_eval:
-            step += drag_iterations
-            self.eval(step=step)
+            self.eval(step=drag_iterations)
 
         # data for motion
         if self.cfg.motion_video:
-            self.make_motion_video(points_init.detach(), quats_init.detach(), anchor.detach(), R.detach(), t.detach(), anchor_group_id, bbox)
+            self.make_motion_video(points_init.detach(), quats_init.detach(), anchor_all.detach(), R.detach(), t_all.detach(), anchor_group_id, bbox)
         
         ##########################################################
         #################### 6. rgb optimize #####################
@@ -1184,8 +1199,8 @@ class Runner:
 
         for i in tqdm(range(rgb_iteration)):
             quats_current = F.normalize(self.splats["quats"], dim=-1)
-            q = quaternion_multiply(quats_current, quats_origin_invert)
-            R = quaternion_to_matrix(q).squeeze()  # (N, 3, 3)
+            quats_all = quaternion_multiply(quats_current, quats_origin_invert)
+            R = quaternion_to_matrix(quats_all).squeeze()  # (N, 3, 3)
             points_now = self.splats["means"]
             loss_arap = arap_loss(points_origin, points_now, R, weight, indices_knn)
             loss_rgb = self.render_and_calc_rgb_loss()
@@ -1547,10 +1562,7 @@ class Runner:
                     "num_GS": len(self.splats["means"]),
                 }
             )
-            from jhutil import color_log; color_log(
-                0000,
-                f"PSNR: {stats['psnr']:.3f}, SSIM: {stats['ssim']:.4f}, LPIPS: {stats['lpips']:.3f} ",
-            )
+            from jhutil import color_log; color_log(0000, f"PSNR: {stats['psnr']:.3f}, SSIM: {stats['ssim']:.4f}, LPIPS: {stats['lpips']:.3f} ")
             print(
                 f"Time: {stats['ellipse_time']:.3f}s/image "
                 f"Number of GS: {stats['num_GS']}"
