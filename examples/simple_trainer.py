@@ -81,7 +81,7 @@ import warnings
 import torch_fpsample
 from sweep_config import sweep_config, best_config_dict, SWEEP_WHOLE_ID
 from gesi.rigid_grouping import local_rigid_grouping, naive_rigid_grouping
-from jhutil import motion_video
+from jhutil import save_video
 from torch.nn import SmoothL1Loss
 
 warnings.simplefilter("ignore")
@@ -1297,7 +1297,7 @@ class Runner:
                 
         output_path = f"/data2/wlsgur4011/GESI/output_video/{self.cfg.data_name}/motion_{self.cfg.object_name}.mp4"
         image_list_rewind = image_list + image_list[::-1]
-        motion_video(image_list_rewind[::4], output_path, fps=60)
+        save_video(image_list_rewind[::4], output_path, fps=60)
                 
 
     def project_to_2d(self, points):
