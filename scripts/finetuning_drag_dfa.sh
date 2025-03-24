@@ -26,4 +26,3 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
     --disable_viewer \
 
 
-set +x; duration=SECONDS; RED='\033[0;31m'; Yellow='\033[1;33m'; Green='\033[0;32m'; NC='\033[0m'; echo -e "RED$((duration / 3600))hNC Yellow$((duration / 60 % 60))mNC Green$((duration % 60))sNC elapsed."

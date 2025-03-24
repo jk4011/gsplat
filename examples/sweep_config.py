@@ -12,6 +12,7 @@ sweep_config = {
         "coef_arap_drag"       : {"values": [5e2, 1e3, 2e3, 3e3, 5e3, 1e4]},
         "coef_group_arap"      : {"values": [1e3, 2e3, 3e3, 1e4, 2e4, 3e4]},
         "coef_arap_rgb"        : {"values": [1]},
+        "coef_drag_3d"         : {"values": [3000]},
         "lr_q"                 : {"values": [1e-2, 2e-2, 3e-2, 5e-2, 1e-1]},
         "lr_t"                 : {"values": [1e-2, 2e-2, 3e-2, 5e-2, 1e-1]},
         "rigidity_k"           : {"values": [10, 20, 30, 40, 50]},
@@ -22,20 +23,37 @@ sweep_config = {
     },
 }
 
-best_config = EasyDict({
-    "lr_q": 0.03,
-    "lr_t": 0.03,
-    "anchor_k": 9,
-    "n_anchor": 300,
-    "coef_drag": 1,
-    "coef_drag_3d": 3000,
-    "rbf_gamma": 50,
-    "rigidity_k": 40,
-    "coef_arap_rgb": 1,
-    "coef_arap_drag": 3000,
-    "reprojection_error": 5,
-    "coef_group_arap": 3000,
-    "cycle_threshold": 20,
+best_config_dict = EasyDict({
+    "DFA": {
+        "lr_q": 0.03,
+        "lr_t": 0.01,
+        "anchor_k": 12,
+        "n_anchor": 300,
+        "coef_drag": 0.5,
+        "coef_drag_3d": 3000,
+        "rbf_gamma": 70,
+        "rigidity_k": 50,
+        "coef_arap_rgb": 1,
+        "coef_arap_drag": 2000,
+        "coef_group_arap": 20000,
+        "cycle_threshold": 20,
+        "reprojection_error": 6
+    },
+    "diva360": {
+        "lr_q": 0.03,
+        "lr_t": 0.03,
+        "anchor_k": 9,
+        "n_anchor": 300,
+        "coef_drag": 1,
+        "coef_drag_3d": 3000,
+        "rbf_gamma": 50,
+        "rigidity_k": 40,
+        "coef_arap_rgb": 1,
+        "coef_arap_drag": 3000,
+        "reprojection_error": 5,
+        "coef_group_arap": 3000,
+        "cycle_threshold": 10,
+    }
 })
 
 
@@ -56,6 +74,6 @@ def print_best_sweep_config(sweep_full_id):
 
 
 if __name__ == "__main__":
-    print_new_sweep_id(sweep_config, project_name="GESI_sweep")
-    # print_best_sweep_config(SWEEP_WHOLE_ID)
+    # print_new_sweep_id(sweep_config, project_name="GESI_sweep")
+    print_best_sweep_config(SWEEP_WHOLE_ID)
 

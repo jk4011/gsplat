@@ -79,7 +79,7 @@ from jhutil import (
 from gesi.roma import get_drag_roma
 import warnings
 import torch_fpsample
-from sweep_config import sweep_config, best_config, SWEEP_WHOLE_ID
+from sweep_config import sweep_config, best_config_dict, SWEEP_WHOLE_ID
 from gesi.rigid_grouping import local_rigid_grouping, naive_rigid_grouping
 from jhutil import save_video
 from torch.nn import SmoothL1Loss
@@ -226,8 +226,6 @@ class Config:
     wandb_group: str = None
 
     wandb_sweep: bool = False
-    
-    make_motion: bool = False
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -526,11 +524,11 @@ class Runner:
                 group=cfg.wandb_group,
                 name=cfg.object_name,
                 settings=wandb.Settings(start_method="fork"),
-                config=best_config,
+                config=best_config_dict[cfg.data_name],
             )
-            self.hpara = best_config
+            self.hpara = best_config_dict[cfg.data_name]
         else:
-            self.hpara = best_config
+            self.hpara = best_config_dict[cfg.data_name]
         
         if cfg.data_name == "DFA":
             self.backgrounds = torch.ones(1, 3, device=self.device)   # white
@@ -953,7 +951,6 @@ class Runner:
         coef_drag            = self.hpara.coef_drag
         coef_arap_drag       = self.hpara.coef_arap_drag
         coef_group_arap      = self.hpara.coef_group_arap
-        coef_arap_drag       = self.hpara.coef_arap_drag
         coef_arap_rgb        = self.hpara.coef_arap_rgb
         coef_drag            = self.hpara.coef_drag
         lr_q                 = self.hpara.lr_q
@@ -1153,25 +1150,6 @@ class Runner:
                         step=i,
                         commit=True,
                     )
-
-            if is_save_video:
-                with torch.no_grad():
-                    image_source, image_target = self.fetch_comparable_two_image()
-
-                w_from, h_from, w_to, h_to = bbox
-                image_source = image_source[:, h_from:h_to, w_from:w_to]
-                image_target = image_target[:, h_from:h_to, w_from:w_to]
-                if i == 0:
-                    image_list = []
-                image_concat = torch.cat(
-                    [image_source.squeeze(), image_target.squeeze()], dim=1
-                )
-                image_list.append(image_concat)
-                
-                if i == drag_iterations - 1:
-                    output_path = f"/data2/wlsgur4011/GESI/output_drag/optimization_{self.cfg.object_name}.mp4"
-                    save_video(image_list[:100], output_path, fps=30)
-                
                 
 
         if is_eval:
@@ -1179,7 +1157,8 @@ class Runner:
             self.eval(step=step)
 
         # data for motion
-        torch.save([points_init, quats_init, anchor, R, t.detach(), anchor_group_id, bbox], f"/tmp/.cache/{self.cfg.object_name}_motion_data.pt")
+        if is_save_video:
+            self.make_motion_video(points_init.detach(), quats_init.detach(), anchor.detach(), R.detach(), t.detach(), anchor_group_id, bbox)
         
         ##########################################################
         #################### 6. rgb optimize #####################
@@ -1216,28 +1195,10 @@ class Runner:
             step += rgb_iteration
             self.eval(step=step)
 
-        if is_save_video:
-            with torch.no_grad():
-                image_source, image_target = self.fetch_comparable_two_image()
-
-            w_from, h_from, w_to, h_to = bbox
-            image_source = image_source[:, h_from:h_to, w_from:w_to]
-            image_target = image_target[:, h_from:h_to, w_from:w_to]
-
-            image_concat = torch.cat(
-                [image_source.squeeze(), image_target.squeeze()], dim=1
-            )
-            folder_path = "/data2/wlsgur4011/GESI/output_images/drag"
-            os.makedirs(folder_path, exist_ok=True)
-            save_img(image_concat, os.path.join(folder_path, f"rgb.png"))
-
-    
-    def make_motion(self, n_iter=300):
-        points_init, quats_init, anchor, R_goal, t_goal, anchor_group_id, bbox = \
-            torch.load(f"/tmp/.cache/{self.cfg.object_name}_motion_data.pt")
-        self.splats["means"].data.copy_(points_init)
-        self.splats["quats"].data.copy_(quats_init)
+    def make_motion_video(self, points_init, quats_init, anchor, R_goal, t_goal, anchor_group_id, bbox, n_iter=300):
         
+        self.splats["means"].data.copy_(points_init.detach())
+        self.splats["quats"].data.copy_(quats_init.detach())
         
         # get haraparameter
         coef_drag            = self.hpara.coef_drag_3d
@@ -1749,10 +1710,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         if cfg.compression is not None:
             runner.run_compression(step=step)
         if cfg.single_finetune:
-            if cfg.make_motion:
-                runner.make_motion()
-            else:
-                runner.train_drag()
+            runner.train_drag()
     else:
         runner.train()
 
