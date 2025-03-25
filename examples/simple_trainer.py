@@ -1505,11 +1505,6 @@ class Runner:
                 _, img1, img2 = crop_two_image_with_background(colors_p[0], pixels_p[0])
                 img_diff_list.append(get_img_diff(img1, img2))
 
-                if not self.cfg.single_finetune and max(metrics["psnr"]) == metrics["psnr"][-1]:
-                    splats = self.splats.state_dict()
-                    splats = cluster_largest(splats)
-                    ckpt = {"step": step, "splats": splats, "clustered": True}
-                    torch.save(ckpt, f"{self.ckpt_dir}/ckpt_best_psnr.pt")
 
                 metrics["ssim"].append(self.ssim(colors_p, pixels_p))
                 metrics["lpips"].append(self.lpips(colors_p, pixels_p))
@@ -1558,6 +1553,18 @@ class Runner:
                 self.writer.add_scalar(f"{stage}/{k}", v, step)
             self.writer.flush()
 
+        if not hasattr(self, "max_psnr"):
+            self.max_psnr = 0
+
+        if not self.cfg.single_finetune and stats["psnr"] > self.max_psnr:
+            self.max_psnr = stats["psnr"]
+            splats = self.splats.state_dict()
+            eps = 0.05 if self.cfg.data_name == "diva360" else 0.015
+            splats = cluster_largest(splats, eps=eps)
+            ckpt = {"step": step, "splats": splats, "clustered": True}
+            torch.save(ckpt, f"{self.ckpt_dir}/ckpt_best_psnr.pt")
+            
+        
     @torch.no_grad()
     def render_traj(self, step: int):
         """Entry for trajectory rendering."""
