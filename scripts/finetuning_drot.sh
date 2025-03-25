@@ -10,7 +10,7 @@ fine_tuning_idx=0239
 GPU=$1
 
 CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
-    --data_dir /data2/wlsgur4011/Diva360_data/3dgs_data/${object_name}_${fine_tuning_idx}/ \
+    --data_dir /data2/wlsgur4011/GESI/gsplat/data/diva360_processed/${object_name}_${fine_tuning_idx}/ \
     --result_dir ./results/${object_name}_finetune \
     --ckpt ./results/${object_name}_${origin_idx}/ckpts/ckpt_best_psnr.pt \
     --data_factor 1 \

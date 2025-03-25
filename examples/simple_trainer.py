@@ -1789,7 +1789,7 @@ def run_all_data(cfg: Config):
         }
         for object_name, (index_from, index_to) in image_indices.items():
             
-            data_dir = f"/data2/wlsgur4011/Diva360_data/3dgs_data/{object_name}_{index_to}/"
+            data_dir = f"/data2/wlsgur4011/GESI/gsplat/data/diva360_processed/{object_name}_{index_to}/"
             ckpt = [f"./results/{object_name}_{index_from}/ckpts/ckpt_best_psnr.pt"]
             result_dir = f"./results/diva360/{object_name}_sweep"
             cfg.result_dir = result_dir

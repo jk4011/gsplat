@@ -13,7 +13,7 @@ index_from=0217
 index_to=0239
 
 CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
-    --data_dir /data2/wlsgur4011/Diva360_data/3dgs_data/${object_name}_${index_to}/ \
+    --data_dir /data2/wlsgur4011/GESI/gsplat/data/diva360_processed/${object_name}_${index_to}/ \
     --result_dir ./results/${object_name}_finetune \
     --ckpt ./results/${object_name}_${index_from}/ckpts/ckpt_best_psnr.pt \
     --data_factor 1 \
