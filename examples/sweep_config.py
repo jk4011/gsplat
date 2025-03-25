@@ -53,6 +53,7 @@ best_config_dict = EasyDict({
         "reprojection_error": 6,
     },
     "diva360": {
+        "decay_rate": 1,
         "lr_q": 0.03,
         "lr_t": 0.03,
         "anchor_k": 9,
