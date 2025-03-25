@@ -1,52 +1,52 @@
 import wandb
 from easydict import EasyDict
 
-SWEEP_WHOLE_ID = "jh11/GESI_sweep/m86h7dkn"
+SWEEP_WHOLE_ID = "jh11/GESI_sweep/to2m3dor"
 
 sweep_config = {
     "method": "bayes",  # grid, random, bayes 중 선택
     "metric": {"name": "psnr_mean", "goal": "maximize"},
     "parameters": {
         "n_anchor_list" : {"values": [
+            # [300, 300, 300, 300, 300],
             [200, 250, 300, 350, 400],
             [100, 200, 300, 400, 500],
-            [150, 350, 500, 700, 1000],
-            [200, 400, 600, 800, 1000],
-            [300, 400, 500, 700, 1000],
-            [100, 200, 500, 1000, 2000],
-            [300, 400, 500, 1000, 2000],
-            [400, 600, 800, 1000, 2000],
-            [300, 500, 1000, 2000, 3000],
-            [300, 500, 1000, 2000, 5000],
+            [100, 200, 300, 500, 1000],
+            [300, 300, 300, 300, 1000],
+            [300, 300, 300, 500, 500],
+            [300, 300, 300, 1000, 1000],
+            [300, 300, 300, 1500, 1500],
+            [300, 300, 300, 2000, 2000],
+            [300, 300, 300, 3000, 3000],
         ]},
-        "decay_rate"           : {"values": [0.99, 0.995, 0.997, 0.999]},
-        "coef_drag"            : {"values": [0.3, 0.5, 1, 1.5, 2]},
-        "coef_arap_drag"       : {"values": [5e2, 1e3, 2e3, 3e3, 5e3, 1e4]},
-        "coef_group_arap"      : {"values": [1e3, 2e3, 3e3, 1e4, 2e4, 3e4]},
-        "coef_rgb"             : {"values": [0.01, 0.2, 0.5, 1, 2, 5]},
+        "decay_rate"           : {"values": [0.998, 0.999, 1]},
+        "coef_drag"            : {"values": [0.5, 1]},
+        "coef_arap_drag"       : {"values": [1e3, 2e3, 5e3]},
+        "coef_group_arap"      : {"values": [1e4, 2e4, 5e4]},
+        "coef_rgb"             : {"values": [1e2, 2e2, 5e2, 1e3, 2e3, 5e3]},
         "coef_drag_3d"         : {"values": [3000]},
-        "lr_q"                 : {"values": [1e-2, 2e-2, 3e-2, 5e-2, 1e-1]},
-        "lr_t"                 : {"values": [1e-2, 2e-2, 3e-2, 5e-2, 1e-1]},
-        "rigidity_k"           : {"values": [10, 20, 30, 40, 50]},
-        "reprojection_error"   : {"values": [3, 4, 5, 6, 7, 8]},
-        "anchor_k"             : {"values": [7, 8, 9, 10, 12, 15]},
-        "rbf_gamma"            : {"values": [30, 40, 50, 60, 70]},
-        "cycle_threshold"      : {"values": [5, 7, 10, 15, 20, 25]},
+        "lr_q"                 : {"values": [3e-2]},
+        "lr_t"                 : {"values": [1e-34, 3e-3, 1e-2, 2e-2, 3e-2]},
+        "rigidity_k"           : {"values": [40, 50]},
+        "reprojection_error"   : {"values": [5, 6]},
+        "anchor_k"             : {"values": [9]},
+        "rbf_gamma"            : {"values": [50, 60, 70]},
+        "cycle_threshold"      : {"values": [10, 15, 20, 25]},
     },
 }
 
 best_config_dict = EasyDict({
     "DFA": {
-        "decay_rate": 0.995,
+        "decay_rate": 0.999,
         "lr_q": 0.03,
         "lr_t": 0.01,
         "anchor_k": 9,
-        "n_anchor_list": [200, 250, 300, 350, 400],
+        "n_anchor_list": [300, 300, 300, 300, 300],
         "coef_drag": 0.5,
         "coef_drag_3d": 3000,
         "rbf_gamma": 70,
         "rigidity_k": 50,
-        "coef_rgb": 0,
+        "coef_rgb": 1000,
         "coef_arap_drag": 2000,
         "coef_group_arap": 20000,
         "cycle_threshold": 20,

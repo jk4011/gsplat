@@ -966,6 +966,7 @@ class Runner:
         cycle_threshold      = self.hpara.cycle_threshold
         decay_rate           = self.hpara.decay_rate
         
+        self.splats = dict(self.splats)
         points_init = self.splats["means"].clone().detach()
         quats_init = self.splats["quats"].clone().detach()
         
@@ -991,7 +992,7 @@ class Runner:
         ############### 2. filter points and drag  ###############
         ##########################################################
         from jhutil import color_log; color_log(2222, "filter points and start drag")
-        points_3d = self.splats.means.clone().detach()
+        points_3d = self.splats["means"].clone().detach()
         points_3d.requires_grad = True
 
         # set drag
@@ -1131,12 +1132,13 @@ class Runner:
 
             points_lbs, quats_lbs = linear_blend_skinning_knn(points_3d, anchor, R, t)
             updated_quaternions = quaternion_multiply(quats_lbs, quats_origin)
-            self.splats["means"].data.copy_(points_lbs)
-            self.splats["quats"].data.copy_(updated_quaternions)
 
             points_lbs_filtered = points_lbs[points_mask]
             points_lbs_filtered_2d, _ = self.project_to_2d(points_lbs_filtered)
             loss_drag = drag_loss(points_lbs_filtered_2d, drag_target_filtered)
+
+            self.splats["means"] = points_lbs
+            self.splats["quats"] = updated_quaternions
             loss_rgb = self.render_and_calc_rgb_loss() if i > 300 else 0
 
             loss = (
@@ -1150,7 +1152,7 @@ class Runner:
             anchor_optimizer.step()
             anchor_optimizer.zero_grad()
 
-            if i % 100 == 0:
+            if i % 100 == 99:
                 quats_all_lbs = quats_lbs[anchor_indice_all][:, None, :]
                 t_all_lbs = (points_lbs - points_3d)[anchor_indice_all]
                 
@@ -1201,13 +1203,11 @@ class Runner:
         ########### a. initialize anchor and optimizer ###########
         ##########################################################
         
-        points_origin = self.splats["means"].clone().detach()
         quats_origin = F.normalize(self.splats["quats"].clone().detach(), dim=-1)
+        points_3d = self.splats["means"].clone().detach()
         
-        self.splats["means"].data.copy_(points_origin)
         self.splats["quats"].data.copy_(quats_origin)
         
-        points_3d = self.splats.means.clone().detach()
 
         anchor = anchor.to(self.device)
         N = anchor.shape[0]
@@ -1369,7 +1369,6 @@ class Runner:
                 else:
                     drag_render = drag_render[:: n_drag // n_pts]
                     drag_query = drag_query[:: n_drag // n_pts]
-                # breakpoint()
                 origin_image = show_matching(img1[:3], img2[:3], bbox=bbox, skip_line=True)
                 matching_image = show_matching(
                     img1[:3],
@@ -1446,7 +1445,8 @@ class Runner:
             colors, depths = renders[..., 0:3], renders[..., 3:4]
         else:
             colors, depths = renders, None
-        rgb_loss = F.l1_loss(colors, gt_images)
+        rgb_loss = F.mse_loss(colors, gt_images)
+
         return rgb_loss
 
     @torch.no_grad()
@@ -1771,7 +1771,7 @@ def run_all_data(cfg: Config):
 
         psnr_mean = np.mean(list(all_psnr_for_sweep.values()))
         wandb.log(all_psnr_for_sweep)
-        wandb.log({"psnr_mean": psnr_mean})
+        wandb.log({"psnr/psnr_mean": psnr_mean})
     
     elif cfg.data_name == "diva360":
         image_indices = {
