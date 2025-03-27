@@ -1016,6 +1016,10 @@ class Runner:
 
             return points_mask, drag_mask
 
+        # 18.front_mask.ipynb
+        # torch.save([points_3d, points_2d, points_depth, drag_source, H, W], "/tmp/.cache/drag_source.pt")
+        # exit()
+
         points_mask, drag_mask = get_drag_mask(
             points_2d, points_depth, drag_source, filter_distance
         )
@@ -1445,7 +1449,7 @@ class Runner:
             colors, depths = renders[..., 0:3], renders[..., 3:4]
         else:
             colors, depths = renders, None
-        rgb_loss = F.mse_loss(colors, gt_images)
+        rgb_loss = F.l1_loss(colors, gt_images)
 
         return rgb_loss
 
@@ -1500,12 +1504,13 @@ class Runner:
 
                 pixels_p = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
                 colors_p = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
-                # torch.save((colors_p, pixels_p), f"/data2/wlsgur4011/GESI/tensors/psnr/{i:03}.pt")
-                metrics["psnr"].append(self.psnr(colors_p, pixels_p))
-                _, img1, img2 = crop_two_image_with_background(colors_p[0], pixels_p[0])
+                try:
+                    _, img1, img2 = crop_two_image_with_background(colors_p[0], pixels_p[0])
+                except:
+                    continue
                 img_diff_list.append(get_img_diff(img1, img2))
 
-
+                metrics["psnr"].append(self.psnr(colors_p, pixels_p))
                 metrics["ssim"].append(self.ssim(colors_p, pixels_p))
                 metrics["lpips"].append(self.lpips(colors_p, pixels_p))
                 if cfg.use_bilateral_grid:
@@ -1782,17 +1787,23 @@ def run_all_data(cfg: Config):
     
     elif cfg.data_name == "diva360":
         image_indices = {
+            "blue_car" : ("0141", "0214"),
             "bunny" : ("0000", "1000"),
             "dog" : ("0177", "0279"),
-            # "horse" : ("0120", "0375"),
             "k1_double_punch" : ("0000", "0555"),
+            "horse" : ("0120", "0375"),
             "k1_hand_stand" : ("0000", "0300"),
             "k1_push_up" : ("0370", "0398"),
+            "music_box" : ("0100", "0125"),
             "penguin" : ("0217", "0239"),
             "trex" : ("0100", "0300"),
             "truck" : ("0078", "0171"),
             "wall_e" : ("0222", "0285"),
             "wolf" : ("0000", "2393"),
+            "red_car" : ("0042", "0250"),
+            "clock" : ("0000", "1500"),
+            "world_globe" : ("0020", "0074"),
+            "stirling" : ("0000", "0045"),
         }
         for object_name, (index_from, index_to) in image_indices.items():
             

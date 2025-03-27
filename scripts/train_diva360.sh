@@ -15,6 +15,6 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
     --data_name diva360 \
     --port 8081 \
     --scale_reg 0.1 \
-    # --disable_viewer \
+    --disable_viewer \
     # --random_bkgd \
     

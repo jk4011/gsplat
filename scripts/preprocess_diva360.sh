@@ -8,13 +8,12 @@ frame_index=$2
 
 
 # Diva360
-data_folder=/data2/wlsgur4011/GESI/gsplat/data/diva360_processed
-origin_folder=${data_folder}/processed_data/${object_name}/frames_1
-processed_folder=${data_folder}/3dgs_data/${object_name}_${frame_index}
-
+data_folder=/data2/wlsgur4011/GESI/gsplat/data
+origin_folder=${data_folder}/Diva360_data/processed_data/${object_name}/frames_1
+processed_folder=${data_folder}/diva360_processed/${object_name}_${frame_index}
 
 # link images
-mkdir -p ${processed_folder}/images | true
+mkdir -p ${processed_folder}/images
 
 cam_list=`ls ${origin_folder}`
 
