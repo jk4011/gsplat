@@ -69,7 +69,9 @@ from gesi.helper import (
     project_pointcloud_to_2d,
     deform_point_cloud_arap_2d,
     knn_djastra,
+    get_drag_mask,
 )
+from gesi.visibility import compute_visibility
 from gesi.mini_pytorch3d import quaternion_multiply, quaternion_invert
 from jhutil import save_img, convert_to_gif, show_matching
 from jhutil import (
@@ -987,8 +989,8 @@ class Runner:
             drag_source, drag_target, bbox = get_drag_roma(
                 image_source, image_target, device=self.device, cycle_threshold=cycle_threshold
             )
-            H = image_source.shape[1]
-            W = image_source.shape[2]
+            self.height = image_source.shape[1]
+            self.width = image_source.shape[2]
 
         ##########################################################
         ############### 2. filter points and drag  ###############
@@ -1001,30 +1003,15 @@ class Runner:
         with torch.no_grad():
             points_2d, points_depth = self.project_to_2d(points_3d)
 
-        def get_drag_mask(points_2d, points_depth, drag_source, filter_distance):
-
-            points_mask = get_visible_mask_by_depth(points_2d, points_depth, H, W)
-            filtered_points_2d = points_2d[points_mask]
-
-            distances, nearest_indices = knn_jh(
-                filtered_points_2d.detach(), drag_source.detach(), k=1, is_sklearn=True
-            )
-
-            distances = distances.squeeze()
-            nearest_indices = nearest_indices.squeeze()
-
-            points_mask[points_mask == True] = distances < filter_distance
-            drag_mask = nearest_indices[distances < filter_distance]
-
-            return points_mask, drag_mask
-
         # 18.front_mask.ipynb
         # torch.save([points_3d, points_2d, points_depth, drag_source, H, W], "/tmp/.cache/drag_source.pt")
         # exit()
 
+        vis_mask = self.get_visibility_mask()
         points_mask, drag_mask = get_drag_mask(
-            points_2d, points_depth, drag_source, filter_distance
+            points_2d, vis_mask, drag_source, filter_distance
         )
+
         points_3d_filtered = points_3d[points_mask]
         drag_target_filtered = drag_target[drag_mask]
 
@@ -1189,7 +1176,21 @@ class Runner:
         # data for motion
         if self.cfg.motion_video:
             self.make_motion_video(points_init.detach(), quats_init.detach(), anchor_all.detach(), R.detach(), t_all.detach(), anchor_group_id, bbox)
-        
+    
+    def get_visibility_mask(self):
+
+        means3d = self.splats["means"]
+        quats = self.splats["quats"]
+        opacities = self.splats["opacities"]
+        scales = self.splats["scales"]
+        Ks = self.data["K"].to(self.device)
+        camtoworlds = self.data["camtoworld"].to(self.device)
+
+        visibility = compute_visibility(self.width, self.height, means3d, quats, opacities, scales, Ks, camtoworlds)
+        visible_mask = visibility > self.hpara.vis_threshold
+
+        return visible_mask
+
 
     def make_motion_video(self, points_init, quats_init, anchor, R_goal, t_goal, anchor_group_id, bbox, n_iter=500):
         

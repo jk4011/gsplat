@@ -38,6 +38,7 @@ sweep_config = {
         "anchor_k"             : {"values": [9]},
         "rbf_gamma"            : {"values": [50, 60, 70]},
         "cycle_threshold"      : {"values": [10, 15, 20, 25]},
+        "vis_threshold"        : {"values": [0.4, 0.5, 0.6, 0.7]},
     },
 }
 
@@ -52,11 +53,12 @@ best_config_dict = EasyDict({
         "decay_rate": 1,
         "rigidity_k": 50,
         "coef_drag_3d": 3000,
-        "n_anchor_list": [300, 300, 300, 1000, 1000],
+        "n_anchor_list": [300, 300, 300, 300, 300],
         "coef_arap_drag": 2000,
         "coef_group_arap": 50000,
         "reprojection_error": 6,
         "cycle_threshold": 10,
+        "vis_threshold": 0.5,
     },
     "diva360": {
         "lr_q": 0.03,
@@ -71,8 +73,9 @@ best_config_dict = EasyDict({
         "coef_rgb": 5000,
         "coef_arap_drag": 3000,
         "reprojection_error": 5,
-        "coef_group_arap": 3000,    
+        "coef_group_arap": 3000,
         "cycle_threshold": 10,
+        "vis_threshold": 0.5,
     }
 })
 
