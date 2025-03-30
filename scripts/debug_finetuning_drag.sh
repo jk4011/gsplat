@@ -6,7 +6,7 @@ set -o xtrace # print command
 GPU=$1
 # object_name=wall_e
 # index_from=0222
-# index_to=0285
+# index_to=0286
 
 object_name=penguin
 index_from=0217

@@ -533,7 +533,7 @@ class Runner:
                 settings=wandb.Settings(start_method="fork"),
                 config=best_config_dict[cfg.data_name],
             )
-            from jhutil import color_log; color_log(1111, asdict(cfg))
+            print(asdict(cfg))
             self.hpara = best_config_dict[cfg.data_name]
         else:
             self.hpara = best_config_dict[cfg.data_name]
@@ -1789,7 +1789,7 @@ def run_all_data(cfg: Config):
     
     elif cfg.data_name == "diva360":
         image_indices = {
-            "blue_car" : ("0141", "0214"),
+            "blue_car" : ("0142", "0214"),
             "bunny" : ("0000", "1000"),
             "dog" : ("0177", "0279"),
             "k1_double_punch" : ("0000", "0555"),
@@ -1800,7 +1800,7 @@ def run_all_data(cfg: Config):
             "penguin" : ("0217", "0239"),
             "trex" : ("0100", "0300"),
             "truck" : ("0078", "0171"),
-            "wall_e" : ("0222", "0285"),
+            "wall_e" : ("0222", "0286"),
             "wolf" : ("0000", "2393"),
             "red_car" : ("0042", "0250"),
             "clock" : ("0000", "1500"),

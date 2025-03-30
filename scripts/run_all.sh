@@ -10,7 +10,7 @@ bash scripts/finetuning_drag.sh 2 k1_hand_stand 0000 0300 tmp &
 bash scripts/finetuning_drag.sh 3 k1_push_up 0370 0398 tmp &
 bash scripts/finetuning_drag.sh 3 penguin 0217 0239 tmp &
 bash scripts/finetuning_drag.sh 4 trex 0100 0300 tmp &
-bash scripts/finetuning_drag.sh 4 wall_e 0222 0285  tmp &
+bash scripts/finetuning_drag.sh 4 wall_e 0222 0286  tmp &
 bash scripts/finetuning_drag.sh 5 wolf 0000 2393 tmp &
 bash scripts/finetuning_drag.sh 5 truck 0078 0171 tmp &
 
@@ -23,7 +23,7 @@ bash scripts/make_motion.sh 2 k1_hand_stand 0000 0300 tmp &
 bash scripts/make_motion.sh 3 k1_push_up 0370 0398 tmp &
 bash scripts/make_motion.sh 3 penguin 0217 0239 tmp &
 bash scripts/make_motion.sh 4 trex 0100 0300 tmp &
-bash scripts/make_motion.sh 4 wall_e 0222 0285  tmp &
+bash scripts/make_motion.sh 4 wall_e 0222 0286  tmp &
 bash scripts/make_motion.sh 5 wolf 0000 2393 tmp &
 bash scripts/make_motion.sh 5 truck 0078 0171 tmp &
 
@@ -40,7 +40,7 @@ bash scripts/wandb_sweep.sh 4 v1.5_hpo &
 bash scripts/wandb_sweep.sh 5 v1.5_hpo &
 bash scripts/wandb_sweep.sh 5 v1.5_hpo &
 
-# bash scripts/finetuning_drag.sh 1 blue_car 0141 0214
+# bash scripts/finetuning_drag.sh 1 blue_car 0142 0214
 # bash scripts/finetuning_drag.sh 1 clock 0000 1500
 
 # bash scripts/finetuning_drag.sh 2 horse 0120 0375
