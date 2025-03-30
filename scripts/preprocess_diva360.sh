@@ -8,9 +8,9 @@ frame_index=$2
 
 
 # Diva360
-data_folder=/data2/wlsgur4011/GESI/gsplat/data
+data_folder=/data/rvi/dataset
 origin_folder=${data_folder}/Diva360_data/processed_data/${object_name}/frames_1
-processed_folder=${data_folder}/diva360_processed/${object_name}_${frame_index}
+processed_folder=/data/wlsgur4011/GESI/diva360_processed/${object_name}_${frame_index}
 
 # link images
 mkdir -p ${processed_folder}/images
@@ -23,8 +23,8 @@ for cam_folder in ${cam_list}; do
 done
 
 # create camera meta json
-train_json_path=${data_folder}/processed_data/${object_name}/transforms_train.json
-val_json_path=${data_folder}/processed_data/${object_name}/transforms_val.json
+train_json_path=${data_folder}/Diva360_data/processed_data/${object_name}/transforms_train.json
+val_json_path=${data_folder}/Diva360_data/processed_data/${object_name}/transforms_val.json
 merged_json_path=${processed_folder}/cameras.json
 
 jq -s '{

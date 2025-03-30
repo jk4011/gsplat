@@ -2,7 +2,7 @@ import json
 import math
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -68,6 +68,7 @@ from gesi.helper import (
     get_target_indices_drag,
     project_pointcloud_to_2d,
     deform_point_cloud_arap_2d,
+    knn_djastra,
 )
 from gesi.mini_pytorch3d import quaternion_multiply, quaternion_invert
 from jhutil import save_img, convert_to_gif, show_matching
@@ -532,6 +533,7 @@ class Runner:
                 settings=wandb.Settings(start_method="fork"),
                 config=best_config_dict[cfg.data_name],
             )
+            from jhutil import color_log; color_log(1111, asdict(cfg))
             self.hpara = best_config_dict[cfg.data_name]
         else:
             self.hpara = best_config_dict[cfg.data_name]

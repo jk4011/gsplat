@@ -1,4 +1,4 @@
-# bash scripts/preprocess_dfa.sh /data/wlsgur4011/DFA /data2/wlsgur4011/GESI/gsplat/data/DFA_processed
+# bash scripts/preprocess_dfa.sh /data/wlsgur4011/DFA /data/wlsgur4011/GESI/DFA_processed/
 
 #!/bin/bash
 set -e        # exit when error
