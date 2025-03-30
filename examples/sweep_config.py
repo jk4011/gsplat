@@ -1,7 +1,7 @@
 import wandb
 from easydict import EasyDict
 
-SWEEP_WHOLE_ID = "jh11/GESI_sweep/spq30kb0"
+SWEEP_WHOLE_ID = "jh11/GESI_sweep/gtbjbz6f"
 
 sweep_config = {
     "method": "bayes",  # grid, random, bayes 중 선택
@@ -27,18 +27,18 @@ sweep_config = {
         ]},
         "decay_rate"           : {"values": [0.998, 0.999, 1]},
         "coef_drag"            : {"values": [0.5, 1]},
-        "coef_arap_drag"       : {"values": [1e3, 2e3, 5e3]},
+        "coef_arap_drag"       : {"values": [1e3, 2e3, 5e3, 1e4]},
         "coef_group_arap"      : {"values": [1e4, 2e4, 5e4]},
-        "coef_rgb"             : {"values": [1e2, 2e2, 5e2, 1e3, 2e3, 5e3]},
+        "coef_rgb"             : {"values": [1e3, 2e3, 5e3, 1e4, 2e4]},
         "coef_drag_3d"         : {"values": [3000]},
         "lr_q"                 : {"values": [3e-2]},
         "lr_t"                 : {"values": [1e-34, 3e-3, 1e-2, 2e-2, 3e-2]},
-        "rigidity_k"           : {"values": [40, 50]},
-        "reprojection_error"   : {"values": [5, 6]},
-        "anchor_k"             : {"values": [9]},
+        "rigidity_k"           : {"values": [30, 40, 50, 100]},
+        "reprojection_error"   : {"values": [3, 5, 6, 7, 10]},
+        "anchor_k"             : {"values": [9, 10, 12, 15]},
         "rbf_gamma"            : {"values": [50, 60, 70]},
         "cycle_threshold"      : {"values": [10, 15, 20, 25]},
-        "vis_threshold"        : {"values": [0.4, 0.5, 0.6, 0.7]},
+        "vis_threshold"        : {"values": [0.4, 0.5, 0.6, 0.7, 0.8]},
     },
 }
 
