@@ -971,8 +971,8 @@ class Runner:
         rbf_gamma            = self.hpara.rbf_gamma
         cycle_threshold      = self.hpara.cycle_threshold
         decay_rate           = self.hpara.decay_rate
-        min_inlier_ratio     = self.min_inlier_ratio
-        confidence           = self.confidence
+        min_inlier_ratio     = self.hpara.min_inlier_ratio
+        confidence           = self.hpara.confidence
         
         self.splats = dict(self.splats)
         points_init = self.splats["means"].clone().detach()
