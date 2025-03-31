@@ -33,20 +33,22 @@ sweep_config = {
 
 best_config_dict = EasyDict({
     "DFA": {
+        "anchor_k": 9,
+        "coef_arap_drag": 2000,
+        "coef_drag": 0.5,
+        "coef_drag_3d": 3000,
+        "coef_group_arap": 50000,
+        "coef_rgb": 5000,
+        "confidence": 0.99,
+        "cycle_threshold": 10,
+        "decay_rate": 1,
         "lr_q": 0.03,
         "lr_t": 0.003,
-        "anchor_k": 9,
-        "coef_rgb": 5000,
-        "coef_drag": 0.5,
-        "rbf_gamma": 50,
-        "decay_rate": 1,
-        "rigidity_k": 50,
-        "coef_drag_3d": 3000,
+        "min_inlier_ratio": 0.7,
         "n_anchor_list": [300, 300, 300, 300, 300],
-        "coef_arap_drag": 2000,
-        "coef_group_arap": 50000,
+        "rbf_gamma": 50,
         "reprojection_error": 6,
-        "cycle_threshold": 10,
+        "rigidity_k": 50,
         "vis_threshold": 0.5,
     },
     "diva360": {
@@ -56,10 +58,12 @@ best_config_dict = EasyDict({
         "coef_drag_3d": 3000,
         "coef_group_arap": 2000,
         "coef_rgb": 20000,
+        "confidence": 0.99,
         "cycle_threshold": 10,
         "decay_rate": 1,
         "lr_q": 0.03,
         "lr_t": 0.02,
+        "min_inlier_ratio": 0.7,
         "n_anchor_list": [300, 300, 300, 300, 300],
         "rbf_gamma": 50,
         "reprojection_error": 10,
@@ -80,7 +84,8 @@ def print_best_sweep_config(sweep_full_id):
 
     sweep = api.sweep(sweep_full_id)
     best_run = sweep.best_run()
-    best_config = best_run.config
+    # best_config = best_run.config
+    best_config = best_config_dict["DFA"]
     print("{")
     for key in sorted(best_config):
         print(f"    \"{key}\": {best_config[key]},")
@@ -88,6 +93,6 @@ def print_best_sweep_config(sweep_full_id):
 
 
 if __name__ == "__main__":
-    print_new_sweep_id(sweep_config, project_name="GESI_sweep")
-    # print_best_sweep_config(SWEEP_WHOLE_ID)
+    # print_new_sweep_id(sweep_config, project_name="GESI_sweep")
+    print_best_sweep_config(SWEEP_WHOLE_ID)
 

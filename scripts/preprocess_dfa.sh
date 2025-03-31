@@ -43,7 +43,7 @@ for datadir in "$DATA_DIR"/*; do
                     fi
 
                     # 출력 경로 생성: OUTPUT_DIR/data_name/subfolder/frame
-                    dest_seq_dir="$OUTPUT_DIR/${data_name}_${subfolder_name}/$frame"
+                    dest_seq_dir="$OUTPUT_DIR/${data_name}\(${subfolder_name}\)/$frame"
                     mkdir -p "$dest_seq_dir/images"
 
                     # frame 폴더 내의 이미지 파일 처리
