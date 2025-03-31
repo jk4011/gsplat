@@ -5,7 +5,7 @@ scripts_name_list=("finetuning_drag_diva360.sh" "run_naive_group_diva360.sh" "ru
 wandb_group_name_list=("v1.12_point_arap" "v1.12_naive_group" "v1.12_wo_group")
 
 # loop over three scripts
-for i in {0..0}
+for i in {0..2}
 do
     scripts_name=${scripts_name_list[$i]}
     wandb_group_name=${wandb_group_name_list[$i]}
