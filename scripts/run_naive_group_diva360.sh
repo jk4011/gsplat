@@ -11,7 +11,7 @@ version=$5
 
 CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
     --data_dir /data2/wlsgur4011/GESI/gsplat/data/diva360_processed/${object_name}_${index_to}/ \
-    --result_dir ./results/${object_name}_finetune \
+    --result_dir ./results/diva360/${object_name}_finetune \
     --ckpt ./results/diva360/${object_name}_${index_from}/ckpts/ckpt_best_psnr.pt \
     --data_factor 1 \
     --data_name diva360 \
@@ -22,6 +22,6 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
     --wandb \
     --wandb_group ${version} \
     --disable_viewer \
+    --naive_group \
 
 
-set +x; duration=SECONDS; RED='\033[0;31m'; Yellow='\033[1;33m'; Green='\033[0;32m'; NC='\033[0m'; echo -e "RED$((duration / 3600))hNC Yellow$((duration / 60 % 60))mNC Green$((duration % 60))sNC elapsed."

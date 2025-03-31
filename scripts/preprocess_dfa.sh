@@ -20,7 +20,10 @@ OUTPUT_DIR="$2"
 
 # 데이터 디렉토리 순회
 for datadir in "$DATA_DIR"/*; do
-
+    # if datadir is not panda continue
+    if [ "$(basename "$datadir")" != "panda" ]; then
+        continue
+    fi
     if [ -d "$datadir" ]; then
         data_name=$(basename "$datadir")
         # img 폴더 아래의 모든 subfolder (예: s1) 순회
