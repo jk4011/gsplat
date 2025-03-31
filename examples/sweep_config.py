@@ -61,21 +61,21 @@ best_config_dict = EasyDict({
         "vis_threshold": 0.5,
     },
     "diva360": {
-        "lr_q": 0.03,
-        "lr_t": 0.03,
-        "anchor_k": 9,
-        "n_anchor_list": [300, 300, 300, 300, 300],
+        "anchor_k": 12,
+        "coef_arap_drag": 10000,
         "coef_drag": 1,
         "coef_drag_3d": 3000,
-        "rbf_gamma": 50,
-        "decay_rate": 1,
-        "rigidity_k": 40,
-        "coef_rgb": 5000,
-        "coef_arap_drag": 3000,
-        "reprojection_error": 5,
-        "coef_group_arap": 3000,
+        "coef_group_arap": 2000,
+        "coef_rgb": 20000,
         "cycle_threshold": 10,
-        "vis_threshold": 0.5,
+        "decay_rate": 1,
+        "lr_q": 0.03,
+        "lr_t": 0.02,
+        "n_anchor_list": [300, 300, 300, 300, 300],
+        "rbf_gamma": 50,
+        "reprojection_error": 10,
+        "rigidity_k": 100,
+        "vis_threshold": 0.4,
     }
 })
 
@@ -92,11 +92,13 @@ def print_best_sweep_config(sweep_full_id):
     sweep = api.sweep(sweep_full_id)
     best_run = sweep.best_run()
     best_config = best_run.config
-    
-    from jhutil import color_log; color_log(1111, best_config)
+    print("{")
+    for key in sorted(best_config):
+        print(f"    \"{key}\": {best_config[key]},")
+    print("}")
 
 
 if __name__ == "__main__":
-    print_new_sweep_id(sweep_config, project_name="GESI_sweep")
-    # print_best_sweep_config(SWEEP_WHOLE_ID)
+    # print_new_sweep_id(sweep_config, project_name="GESI_sweep")
+    print_best_sweep_config(SWEEP_WHOLE_ID)
 

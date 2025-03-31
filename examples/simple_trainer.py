@@ -231,6 +231,8 @@ class Config:
     wandb_sweep: bool = False
     
     without_group: bool = False
+
+    naive_group: bool = False
     
     motion_video: bool = False
     
@@ -1071,19 +1073,29 @@ class Runner:
         #################### 4. rigid grouping ###################
         ##########################################################
         from jhutil import color_log; color_log(4444, "rigid grouping")
-    
-        groups, outliers, group_trans = local_rigid_grouping(
-            points_3d_filtered,
-            drag_target_filtered,
-            k=rigidity_k,
-            min_inlier_ratio=0.7,
-            min_inlier_size=100,
-            max_expansion_iterations=100,
-            reprojection_error=reprojection_error,
-            confidence=0.99,
-            iterations_count=100,
-            camera_matrix=self.data["K"][0],
-        )
+
+        if self.cfg.naive_group:
+            groups = naive_rigid_grouping(
+                points_3d_filtered,
+                drag_target_filtered,
+                reprojection_error,
+                confidence=0.99,
+                camera_matrix=self.data["K"][0]
+            )
+        else:
+            groups, outliers, group_trans = local_rigid_grouping(
+                points_3d_filtered,
+                drag_target_filtered,
+                k=rigidity_k,
+                min_inlier_ratio=0.7,
+                min_inlier_size=100,
+                max_expansion_iterations=100,
+                reprojection_error=reprojection_error,
+                confidence=0.99,
+                iterations_count=100,
+                camera_matrix=self.data["K"][0],
+            )
+
         groud_id = -torch.ones(
             points_3d_filtered.shape[0], dtype=torch.long, device=self.device
         )
@@ -1119,12 +1131,17 @@ class Runner:
             anchor_translated = anchor + t  # (N, 3)
 
             loss_arap = arap_loss(anchor, anchor_translated, R, weight, indices_knn)
-            loss_group_arap = arap_loss_grouped(
-                anchor, anchor_translated, R, anchor_group_id
-            )
+            # loss_group_arap = arap_loss_grouped(
+            #     anchor, anchor_translated, R, anchor_group_id
+            # )
 
             points_lbs, quats_lbs = linear_blend_skinning_knn(points_3d, anchor, R, t)
             updated_quaternions = quaternion_multiply(quats_lbs, quats_origin)
+
+            R_points = quaternion_to_matrix(F.normalize(quats_lbs, dim=-1)).squeeze()
+            loss_group_arap = arap_loss_grouped(
+                points_3d, points_lbs, R_points, group_id_all
+            )
 
             points_lbs_filtered = points_lbs[points_mask]
             points_lbs_filtered_2d, _ = self.project_to_2d(points_lbs_filtered)
