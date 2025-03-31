@@ -1,7 +1,7 @@
 import wandb
 from easydict import EasyDict
 
-SWEEP_WHOLE_ID = "jh11/GESI_sweep/gtbjbz6f"
+SWEEP_WHOLE_ID = "jh11/GESI_sweep/s4k8wczj"
 
 sweep_config = {
     "method": "bayes",  # grid, random, bayes 중 선택
@@ -9,36 +9,25 @@ sweep_config = {
     "parameters": {
         "n_anchor_list" : {"values": [
             [300, 300, 300, 300, 300],
-            [200, 300, 400, 500, 1000],
-            [200, 250, 300, 350, 400],
-            [100, 200, 300, 400, 500],
-            [100, 200, 300, 500, 1000],
-            [300, 300, 300, 300, 1000],
-            [300, 300, 300, 500, 500],
-            [250, 250, 250, 500, 500],
-            [250, 250, 250, 1000, 1000],
-            [200, 200, 200, 400, 400],
-            [200, 200, 200, 400, 400],
-            [500, 500, 500, 1000, 1000],
+            [300, 300, 300, 600, 600],
             [300, 300, 300, 1000, 1000],
-            [300, 300, 300, 1500, 1500],
-            [300, 300, 300, 2000, 2000],
-            [300, 300, 300, 3000, 3000],
         ]},
-        "decay_rate"           : {"values": [0.998, 0.999, 1]},
+        "decay_rate"           : {"values": [1]},
         "coef_drag"            : {"values": [0.5, 1]},
-        "coef_arap_drag"       : {"values": [1e3, 2e3, 5e3, 1e4]},
-        "coef_group_arap"      : {"values": [1e4, 2e4, 5e4]},
-        "coef_rgb"             : {"values": [1e3, 2e3, 5e3, 1e4, 2e4]},
+        "coef_arap_drag"       : {"values": [1e3, 2e3, 5e3, 1e4, 2e4]},
+        "coef_group_arap"      : {"values": [2e2, 5e2, 1e3, 2e3, 5e3, 1e4, 2e4, 5e4]},
+        "coef_rgb"             : {"values": [5e3, 1e4, 2e4, 5e4, 1e5, 2e5]},
         "coef_drag_3d"         : {"values": [3000]},
-        "lr_q"                 : {"values": [3e-2]},
-        "lr_t"                 : {"values": [1e-34, 3e-3, 1e-2, 2e-2, 3e-2]},
-        "rigidity_k"           : {"values": [30, 40, 50, 100]},
-        "reprojection_error"   : {"values": [3, 5, 6, 7, 10]},
-        "anchor_k"             : {"values": [9, 10, 12, 15]},
-        "rbf_gamma"            : {"values": [50, 60, 70]},
-        "cycle_threshold"      : {"values": [10, 15, 20, 25]},
-        "vis_threshold"        : {"values": [0.4, 0.5, 0.6, 0.7, 0.8]},
+        "lr_q"                 : {"values": [1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2]},
+        "lr_t"                 : {"values": [1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2]},
+        "rigidity_k"           : {"values": [50, 100]},
+        "reprojection_error"   : {"values": [10]},
+        "anchor_k"             : {"values": [10, 12, 15]},
+        "rbf_gamma"            : {"values": [50]},
+        "cycle_threshold"      : {"values": [10]},
+        "vis_threshold"        : {"values": [0.4, 0.5]},
+        "min_inlier_ratio"     : {"values": [0.5, 0.6, 0.7, 0.8, 0.9]},
+        "confidence"           : {"values": [0.97, 0.98, 0.99]},
     },
 }
 
@@ -99,6 +88,6 @@ def print_best_sweep_config(sweep_full_id):
 
 
 if __name__ == "__main__":
-    # print_new_sweep_id(sweep_config, project_name="GESI_sweep")
-    print_best_sweep_config(SWEEP_WHOLE_ID)
+    print_new_sweep_id(sweep_config, project_name="GESI_sweep")
+    # print_best_sweep_config(SWEEP_WHOLE_ID)
 

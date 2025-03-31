@@ -971,6 +971,8 @@ class Runner:
         rbf_gamma            = self.hpara.rbf_gamma
         cycle_threshold      = self.hpara.cycle_threshold
         decay_rate           = self.hpara.decay_rate
+        min_inlier_ratio     = self.min_inlier_ratio
+        confidence           = self.confidence
         
         self.splats = dict(self.splats)
         points_init = self.splats["means"].clone().detach()
@@ -1079,7 +1081,7 @@ class Runner:
                 points_3d_filtered,
                 drag_target_filtered,
                 reprojection_error,
-                confidence=0.99,
+                confidence=confidence,
                 camera_matrix=self.data["K"][0]
             )
         else:
@@ -1087,11 +1089,11 @@ class Runner:
                 points_3d_filtered,
                 drag_target_filtered,
                 k=rigidity_k,
-                min_inlier_ratio=0.7,
+                min_inlier_ratio=min_inlier_ratio,
+                confidence=confidence,
                 min_inlier_size=100,
                 max_expansion_iterations=100,
                 reprojection_error=reprojection_error,
-                confidence=0.99,
                 iterations_count=100,
                 camera_matrix=self.data["K"][0],
             )
@@ -1131,9 +1133,6 @@ class Runner:
             anchor_translated = anchor + t  # (N, 3)
 
             loss_arap = arap_loss(anchor, anchor_translated, R, weight, indices_knn)
-            # loss_group_arap = arap_loss_grouped(
-            #     anchor, anchor_translated, R, anchor_group_id
-            # )
 
             points_lbs, quats_lbs = linear_blend_skinning_knn(points_3d, anchor, R, t)
             updated_quaternions = quaternion_multiply(quats_lbs, quats_origin)
