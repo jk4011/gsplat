@@ -16,6 +16,7 @@ import tyro
 import viser
 import yaml
 import wandb
+from easydict import EasyDict
 from datasets.colmap import Dataset, Parser
 from datasets.traj import (
     generate_interpolated_path,
@@ -537,7 +538,7 @@ class Runner:
                 settings=wandb.Settings(start_method="fork"),
                 config=best_config_dict[cfg.data_name],
             )
-            print(asdict(cfg))
+            print(EasyDict(asdict(cfg)))
             self.hpara = best_config_dict[cfg.data_name]
         else:
             self.hpara = best_config_dict[cfg.data_name]
@@ -1745,20 +1746,23 @@ def run_all_data(cfg: Config):
             ("beagle_dog", "s1"): {"16": [[520, 525], [170, 175]], "32": [[50, 110]]},
             ("bear", "run"): {"16": [[5, 10]], "32": [[5, 10]]},
             ("bear", "walk"): {"16": [[110, 140]], "24": [[125, 200]], "32": [[140, 145]]},
-            ("cat", "run"): {"32": [[25, 30]] * 2},
-            ("cat", "walk_final"): {"32": [[10, 20]] * 2},
+            ("cat", "run"): {"32": [[25, 30]]},
+            ("cat", "walk_final"): {"32": [[10, 20]]},
             ("cat", "walkprogressive_noz"): {"32": [[165, 210], [25, 30]]},
-            ("cat", "walksniff"): {"32": [[60, 75]] * 2},
+            ("cat", "walksniff"): {"32": [[60, 75]]},
             ("duck", "eat_grass"): {"16": [[50, 90],], "24": [[0, 10], [165, 295]], "32": [[5, 15]]},
             ("duck", "swim"): {"16": [[160, 190]], "24": [[205, 225]], "32": [[200, 215]]},
             ("duck", "walk"): {"16": [[200, 230]], "24": [[120, 135]], "32": [[0, 50]]},
             ("fox", "attitude"): {"32": [[65, 70], [90, 145]]},
-            ("fox", "run"): {"32": [[25, 30],] * 2},
-            ("fox", "walk"): {"24": [[70, 75]] * 2},
+            ("fox", "run"): {"32": [[25, 30],]},
+            ("fox", "walk"): {"24": [[70, 75]]},
             ("lion", "Run"): {"24": [[50, 55]], "32": [[30, 35], [50, 55],]}, 
-            ("lion", "Walk"): {"32": [[30, 35]] * 2},
-            ("whiteTiger", "roaringwalk"): {"32": [[15, 25]] * 2},
-            ("whiteTiger", "run"): {"32": [[70, 80]] * 2},
+            ("lion", "Walk"): {"32": [[30, 35]]},
+            ("panda", "acting"): {"32": [[95, 105], [20, 90]]},
+            ("panda", "run"): {"32": [[0, 5], [5, 10], [40, 45]]},
+            ("panda", "walk"): {"32": [[0, 45], [30, 50], [30, 55]]},
+            ("whiteTiger", "roaringwalk"): {"32": [[15, 25]]},
+            ("whiteTiger", "run"): {"32": [[70, 80]]},
             ("wolf", "Damage"): {"16": [[10, 90]], "24": [[60, 70]], "32": [[0, 110]]},
             ("wolf", "Howling"): {"16": [[0, 90]], "24": [[10, 60], [5, 65], [60, 170]]},
             ("wolf", "Run"): {"16": [[20, 25]], "24": [[35, 40], [30, 35],], "32": [[20, 25], [35, 40]]},

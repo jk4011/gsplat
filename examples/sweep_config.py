@@ -1,7 +1,7 @@
 import wandb
 from easydict import EasyDict
 
-SWEEP_WHOLE_ID = "jh11/GESI_sweep/s4k8wczj"
+SWEEP_WHOLE_ID = "jh11/GESI_sweep/adxyxcte"
 
 sweep_config = {
     "method": "bayes",  # grid, random, bayes 중 선택
@@ -18,8 +18,8 @@ sweep_config = {
         "coef_group_arap"      : {"values": [2e2, 5e2, 1e3, 2e3, 5e3, 1e4, 2e4, 5e4]},
         "coef_rgb"             : {"values": [5e3, 1e4, 2e4, 5e4, 1e5, 2e5]},
         "coef_drag_3d"         : {"values": [3000]},
-        "lr_q"                 : {"values": [1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2]},
-        "lr_t"                 : {"values": [1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2]},
+        "lr_q"                 : {"values": [1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2, 1e-1]},
+        "lr_t"                 : {"values": [1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2, 1e-1]},
         "rigidity_k"           : {"values": [50, 100]},
         "reprojection_error"   : {"values": [10]},
         "anchor_k"             : {"values": [10, 12, 15]},
@@ -93,6 +93,6 @@ def print_best_sweep_config(sweep_full_id):
 
 
 if __name__ == "__main__":
-    # print_new_sweep_id(sweep_config, project_name="GESI_sweep")
-    print_best_sweep_config(SWEEP_WHOLE_ID)
+    print_new_sweep_id(sweep_config, project_name="GESI_sweep")
+    # print_best_sweep_config(SWEEP_WHOLE_ID)
 
