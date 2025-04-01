@@ -1082,7 +1082,6 @@ class Runner:
                 points_3d_filtered,
                 drag_target_filtered,
                 reprojection_error,
-                confidence=confidence,
                 camera_matrix=self.data["K"][0]
             )
         else:
