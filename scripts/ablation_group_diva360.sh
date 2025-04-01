@@ -2,7 +2,7 @@
 # scripts_name = ["finetuning_drag.sh", "run_wo_group_diva360.sh", "run_naive_group_diva360.sh.sh"]
 
 scripts_name_list=("finetuning_drag_diva360.sh" "run_naive_group_diva360.sh" "run_wo_group_diva360.sh")
-wandb_group_name_list=("v1.12_point_arap" "v1.12_naive_group" "v1.12_wo_group")
+wandb_group_name_list=("v1.13_sweep_result" "v1.13_naive_group" "v1.13_wo_group")
 
 # loop over three scripts
 for i in {0..2}
