@@ -37,7 +37,7 @@ best_config_dict = EasyDict({
         "coef_arap_drag": 2000,
         "coef_drag": 0.5,
         "coef_drag_3d": 3000,
-        "coef_group_arap": 50000,
+        "coef_group_arap": 3000,
         "coef_rgb": 5000,
         "confidence": 0.99,
         "cycle_threshold": 10,
@@ -93,6 +93,6 @@ def print_best_sweep_config(sweep_full_id):
 
 
 if __name__ == "__main__":
-    print_new_sweep_id(sweep_config, project_name="GESI_sweep")
-    # print_best_sweep_config(SWEEP_WHOLE_ID)
+    # print_new_sweep_id(sweep_config, project_name="GESI_sweep")
+    print_best_sweep_config(SWEEP_WHOLE_ID)
 
