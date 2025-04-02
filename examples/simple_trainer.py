@@ -1215,7 +1215,7 @@ class Runner:
         
         # get haraparameter
         coef_drag            = self.hpara.coef_drag_3d
-        coef_group_arap      = self.hpara.coef_group_arap * 0.5
+        coef_group_arap      = 0
         coef_arap_drag       = self.hpara.coef_arap_drag * 0.5
         lr_q                 = self.hpara.lr_q * 0.02
         lr_t                 = self.hpara.lr_q * 0.02
