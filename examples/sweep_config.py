@@ -7,9 +7,7 @@ sweep_config = {
     "method": "bayes",  # grid, random, bayes 중 선택
     "metric": {"name": "psnr_mean", "goal": "maximize"},
     "parameters": {
-        "n_anchor_list" : {"values": [
-            [300, 300, 300, 300, 300],
-        ]},
+        "n_anchor_list"        : {"values": [[300, 300, 300, 300, 300]]},
         "decay_rate"           : {"values": [1]},
         "coef_drag"            : {"values": [0.5, 1]},
         "coef_arap_drag"       : {"values": [1e3, 2e3, 5e3, 1e4, 2e4]},

@@ -1215,7 +1215,7 @@ class Runner:
         
         # get haraparameter
         coef_drag            = self.hpara.coef_drag_3d
-        coef_group_arap      = 0
+        coef_group_arap      = self.hpara.coef_group_arap * 0.1
         coef_arap_drag       = self.hpara.coef_arap_drag * 0.5
         lr_q                 = self.hpara.lr_q * 0.02
         lr_t                 = self.hpara.lr_q * 0.02
@@ -1588,6 +1588,7 @@ class Runner:
             ckpt = {"step": step, "splats": splats, "clustered": True}
             torch.save(ckpt, f"{self.ckpt_dir}/ckpt_best_psnr.pt")
             
+        torch.cuda.empty_cache()
         
     @torch.no_grad()
     def render_traj(self, step: int):
@@ -1914,7 +1915,7 @@ if __name__ == "__main__":
 
     # Logger
     if cfg.wandb_sweep:
-        wandb.agent(SWEEP_WHOLE_ID, function=lambda: run_all_data(cfg), count=30)
+        wandb.agent(SWEEP_WHOLE_ID, function=lambda: run_all_data(cfg), count=100)
     else:
         main(0, 0, 1, cfg)
 
