@@ -87,6 +87,7 @@ from sweep_config import sweep_config, best_config_dict, SWEEP_WHOLE_ID
 from gesi.rigid_grouping import local_rigid_grouping, naive_rigid_grouping
 from jhutil import save_video
 from torch.nn import SmoothL1Loss
+from torch.optim.lr_scheduler import LambdaLR
 
 warnings.simplefilter("ignore")
 # warnings.filterwarnings("ignore", category=DeprecationWarning) # certain warning
@@ -1204,8 +1205,7 @@ class Runner:
             self.eval(step=drag_iterations)
 
         # data for motion
-        if self.cfg.motion_video:
-            self.make_motion_video(points_init.detach(), quats_init.detach(), anchor_all.detach(), R.detach(), t_all.detach(), anchor_group_id, bbox)
+        torch.save([points_init.detach(), quats_init.detach(), anchor_all.detach(), R.detach(), t_all.detach(), anchor_group_id, bbox], f"/tmp/.cache/data_motion_{self.cfg.object_name}.pt")
     
     def get_visibility_mask(self):
 
@@ -1222,20 +1222,21 @@ class Runner:
         return visible_mask
 
 
-    def make_motion_video(self, points_init, quats_init, anchor, R_goal, t_goal, anchor_group_id, bbox, n_iter=500):
-        
+    def make_motion_video(self, n_iter=1000):
+
+        points_init, quats_init, anchor, R_goal, t_goal, anchor_group_id, bbox = torch.load(f"/tmp/.cache/data_motion_{self.cfg.object_name}.pt")
         self.splats["means"].data.copy_(points_init.detach())
         self.splats["quats"].data.copy_(quats_init.detach())
         
         # get haraparameter
         coef_drag            = self.hpara.coef_drag_3d
         coef_group_arap      = self.hpara.coef_group_arap * 0.1
-        coef_arap_drag       = self.hpara.coef_arap_drag * 0.5
-        lr_q                 = self.hpara.lr_q * 0.02
-        lr_t                 = self.hpara.lr_q * 0.02
+        coef_arap_drag       = self.hpara.coef_arap_drag * 0.1
+        lr                   = self.hpara.lr_motion
         anchor_k             = self.hpara.anchor_k
         rbf_gamma            = self.hpara.rbf_gamma
-        
+        scheduler_step       = 300
+        threhold_early_stop  = 0.0001
         ##########################################################
         ########### a. initialize anchor and optimizer ###########
         ##########################################################
@@ -1256,13 +1257,8 @@ class Runner:
         q = nn.Parameter(q_init)  # (N, 3, 3)
         t = nn.Parameter(t_init)  # (N, 3)
 
-        anchor_optimizer = torch.optim.Adam(
-            [
-                {"params": q, "lr": lr_q},
-                {"params": t, "lr": lr_t},
-            ]
-        )
-        
+        anchor_optimizer = torch.optim.Adam([q, t], lr=lr, weight_decay=0.01)
+        scheduler = LambdaLR(anchor_optimizer, lr_lambda=lambda step: 0.3 + min(0.7, (step + 1) / scheduler_step))
         ##########################################################
         #################### b. drag optimize ####################
         ##########################################################
@@ -1285,6 +1281,10 @@ class Runner:
                 anchor, anchor_translated, R, anchor_group_id
             )
             loss_drag = loss_fn(R, R_goal) + loss_fn(t, t_goal)
+            
+            if loss_drag < threhold_early_stop:
+                break
+
             points_lbs, quats_lbs = linear_blend_skinning_knn(points_3d, anchor, R, t)
             updated_quaternions = quaternion_multiply(quats_lbs, quats_origin)
             self.splats["means"].data.copy_(points_lbs)
@@ -1292,12 +1292,13 @@ class Runner:
             
             loss = (
                 coef_drag * loss_drag
-                + max(0, 1 - 1.5 * i / n_iter) * coef_group_arap * loss_group_arap
-                + max(0, 1 - 1.5 * i / n_iter) * coef_arap_drag * loss_arap
+                + max(0.001, 1 - i / scheduler_step) * coef_group_arap * loss_group_arap
+                + max(0.001, 1 - i / scheduler_step) * coef_arap_drag * loss_arap
             )
 
             loss.backward(retain_graph=True)
             anchor_optimizer.step()
+            scheduler.step()
             anchor_optimizer.zero_grad()
     
             with torch.no_grad():
@@ -1312,10 +1313,13 @@ class Runner:
                 [image_source.squeeze(), image_target.squeeze()], dim=1
             )
             image_list.append(image_concat.cpu())
+
                 
         output_path = f"/data2/wlsgur4011/GESI/output_video/{self.cfg.data_name}/motion_{self.cfg.object_name}.mp4"
-        image_list_rewind = image_list + image_list[::-1]
-        save_video(image_list_rewind[::4], output_path, fps=60)
+        image_list_rewind = image_list + [image_list[-1]] * 30 + image_list[::-1]
+        
+        stride = max(len(image_list_rewind), 150) // 150
+        save_video(image_list_rewind[::stride], output_path, fps=30)
                 
 
     def project_to_2d(self, points):
@@ -1741,7 +1745,10 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         if cfg.compression is not None:
             runner.run_compression(step=step)
         if cfg.single_finetune:
-            runner.train_drag()
+            if cfg.motion_video:
+                runner.make_motion_video()
+            else:
+                runner.train_drag()
     else:
         runner.train()
 

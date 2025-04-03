@@ -57,6 +57,7 @@ best_config_dict = EasyDict({
         "confidence": 0.97,
         "cycle_threshold": 10,
         "decay_rate": 1,
+        "lr_motion": 1e-3,
         "lr_q": 0.05,
         "lr_t": 0.01,
         "n_anchor_list": [300, 300, 300, 300, 300],
