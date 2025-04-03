@@ -74,7 +74,7 @@ from gesi.helper import (
 )
 from gesi.visibility import compute_visibility
 from gesi.mini_pytorch3d import quaternion_multiply, quaternion_invert
-from jhutil import save_img, convert_to_gif, show_matching
+from jhutil import show_matching, show_groups
 from jhutil import (
     get_img_diff,
     crop_two_image_with_background,
@@ -1019,30 +1019,7 @@ class Runner:
 
         points_3d_filtered = points_3d[points_mask]
         drag_target_filtered = drag_target[drag_mask]
-
-        if wandb.run and not cfg.wandb_sweep:
-            n_drag = len(drag_source)
-            n_pts = 5000
-
-            img1 = rearrange(image_source[0], "h w c -> c h w")
-            img2 = rearrange(image_target[0], "h w c -> c h w")
-            
-            
-            origin_image = show_matching(img1[:3], img2[:3], bbox=bbox, skip_line=True)
-            matching_image = show_matching(
-                img1[:3],
-                img2[:3],
-                drag_source[:: n_drag // n_pts],
-                drag_target[:: n_drag // n_pts],
-                bbox=bbox,
-                skip_line=True,
-            )
-            
-            images = [
-                wandb.Image(origin_image, caption="origin_image"),
-                wandb.Image(matching_image, caption="matching_image"),
-            ]
-            wandb.log({"matching": images}, commit=True)
+        drag_source_filtered = drag_source[drag_mask]
 
         ##########################################################
         ########### 3. initialize anchor and optimizer ###########
@@ -1054,7 +1031,7 @@ class Runner:
 
         anchor_all = anchor_all.to(self.device)
 
-        data_all = [anchor_all, anchor_indice_all, points_mask, drag_mask, points_2d, drag_target, drag_source, image_target, image_source, points_3d, self.data["K"]]
+        data_all = [anchor_all, anchor_indice_all, points_mask, drag_mask, points_2d, drag_target, drag_source, image_target, image_source, points_3d, self.data["K"], bbox]
         torch.save(data_all, f"/tmp/.cache/data_all_{self.cfg.object_name}.pt")
 
         N = anchor_all.shape[0]
@@ -1107,6 +1084,38 @@ class Runner:
             points_3d.shape[0], dtype=torch.long, device=self.device
         )
         group_id_all[points_mask] = groud_id
+
+        if wandb.run and not cfg.wandb_sweep:
+            n_drag = len(drag_source)
+            n_pts = 5000
+
+            img1 = rearrange(image_source[0], "h w c -> c h w")
+            img2 = rearrange(image_target[0], "h w c -> c h w")
+            
+            origin_image = show_matching(img1[:3], img2[:3], bbox=bbox, skip_line=True)
+            matching_image = show_matching(
+                img1[:3],
+                img2[:3],
+                drag_source[:: n_drag // n_pts],
+                drag_target[:: n_drag // n_pts],
+                bbox=bbox,
+                skip_line=True,
+            )
+            group_image = show_groups(
+                img1[:3],
+                img2[:3],
+                drag_source_filtered,
+                drag_target_filtered,
+                groups=groups,
+                bbox=bbox,
+            )
+            
+            images = [
+                wandb.Image(origin_image, caption="origin_image"),
+                wandb.Image(matching_image, caption="matching_image"),
+                wandb.Image(group_image, caption="group_image"),
+            ]
+            wandb.log({"matching": images}, commit=True)
 
         ##########################################################
         #################### 5. drag optimize ####################
@@ -1169,7 +1178,12 @@ class Runner:
                 t_all.data[n_anchor:] = t_all_lbs[n_anchor:].detach()
                 
             if wandb.run and not cfg.wandb_sweep:
-                wandb.log({"loss_arap": loss_arap, "loss_drag": loss_drag, "loss_group_arap": loss_group_arap}, step=i)
+                wandb.log({
+                    "loss_arap"      : loss_arap,
+                    "loss_drag"      : loss_drag,
+                    "loss_group_arap": loss_group_arap,
+                    "loss_rgb"       : loss_rgb
+                }, step=i)
 
                 if i % 100 == 0:
                     image_source, image_target = self.fetch_comparable_two_image(

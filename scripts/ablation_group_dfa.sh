@@ -29,6 +29,8 @@ do
     bash scripts/$scripts_name 5 stirling 0000 0045 $wandb_group_name &
 
     wait
+    
+    trap "exit" INT
 done
 
 
