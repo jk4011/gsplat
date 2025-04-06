@@ -237,8 +237,12 @@ class Config:
     naive_group: bool = False
     
     motion_video: bool = False
+
+    video_name: str = "video"
     
     skip_eval: bool = False
+
+    simple_video: bool = False
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -1205,8 +1209,13 @@ class Runner:
             self.eval(step=drag_iterations)
 
         # data for motion
-        torch.save([points_init.detach(), quats_init.detach(), anchor_all.detach(), R.detach(), t_all.detach(), anchor_group_id, bbox], f"/tmp/.cache/data_motion_{self.cfg.object_name}.pt")
-    
+        motion_data = [points_init.detach(), quats_init.detach(), anchor_all.detach(), R.detach(), t_all.detach(), anchor_group_id, bbox]
+        torch.save(motion_data, f"{self.cfg.result_dir}/motion_data.pt")
+
+        # save checkpoint
+        data = {"step": step, "splats": (torch.nn.ParameterDict(self.splats).state_dict())}
+        torch.save(data, f"{self.cfg.result_dir}/ckpt_finetune.pt")
+
     def get_visibility_mask(self):
 
         means3d = self.splats["means"]
@@ -1222,21 +1231,22 @@ class Runner:
         return visible_mask
 
 
-    def make_motion_video(self, n_iter=1000):
+    def make_motion_video(self, idx=0, n_iter=1000, threhold_early_stop=1e-5 , scheduler_step=300, min_rigid_coef=0):
 
-        points_init, quats_init, anchor, R_goal, t_goal, anchor_group_id, bbox = torch.load(f"/tmp/.cache/data_motion_{self.cfg.object_name}.pt")
+        motion_data = torch.load(f"{self.cfg.result_dir}/motion_data.pt")
+        points_init, quats_init, anchor, R_goal, t_goal, anchor_group_id, bbox = motion_data
         self.splats["means"].data.copy_(points_init.detach())
         self.splats["quats"].data.copy_(quats_init.detach())
         
         # get haraparameter
         coef_drag            = self.hpara.coef_drag_3d
-        coef_group_arap      = self.hpara.coef_group_arap * 0.1
-        coef_arap_drag       = self.hpara.coef_arap_drag * 0.1
+        coef_group_arap      = self.hpara.coef_group_arap * 0.
+        coef_arap_drag       = self.hpara.coef_arap_drag * 0.2
         lr                   = self.hpara.lr_motion
         anchor_k             = self.hpara.anchor_k
         rbf_gamma            = self.hpara.rbf_gamma
-        scheduler_step       = 300
-        threhold_early_stop  = 0.0001
+        
+        
         ##########################################################
         ########### a. initialize anchor and optimizer ###########
         ##########################################################
@@ -1292,8 +1302,8 @@ class Runner:
             
             loss = (
                 coef_drag * loss_drag
-                + max(0.001, 1 - i / scheduler_step) * coef_group_arap * loss_group_arap
-                + max(0.001, 1 - i / scheduler_step) * coef_arap_drag * loss_arap
+                + max(min_rigid_coef, 1 - i / scheduler_step) * coef_group_arap * loss_group_arap
+                + max(min_rigid_coef, 1 - i / scheduler_step) * coef_arap_drag * loss_arap
             )
 
             loss.backward(retain_graph=True)
@@ -1303,24 +1313,34 @@ class Runner:
     
             with torch.no_grad():
                 image_source, image_target = self.fetch_comparable_two_image()
-
-            w_from, h_from, w_to, h_to = bbox
-            image_source = image_source[:, h_from-5:h_to+5, w_from-10:w_to]
-            image_target = image_target[:, h_from-5:h_to+5, w_from-10:w_to]
+            
             if i == 0:
                 image_list = []
-            image_concat = torch.cat(
-                [image_source.squeeze(), image_target.squeeze()], dim=1
-            )
-            image_list.append(image_concat.cpu())
+                
+            if self.cfg.simple_video:
+                image = image_source.squeeze()
+                stride = max(len(image_list), 75) // 75
+            else:
+                # crop
+                w_from, h_from, w_to, h_to = bbox
+                image_source = image_source[:, h_from-5:h_to+5, w_from-10:w_to]
+                image_target = image_target[:, h_from-5:h_to+5, w_from-10:w_to]
+                # src and tgt
+                image = torch.cat(
+                    [image_source.squeeze(), image_target.squeeze()], dim=1
+                )
+                # rewind
+                image_list = image_list + [image_list[-1]] * 30 + image_list[::-1]
+                stride = max(len(image_list), 150) // 150
+            image_list.append(image.cpu())
 
-                
-        output_path = f"/data2/wlsgur4011/GESI/output_video/{self.cfg.data_name}/motion_{self.cfg.object_name}.mp4"
-        image_list_rewind = image_list + [image_list[-1]] * 30 + image_list[::-1]
+        if self.cfg.simple_video:
+            output_path = f"/data2/wlsgur4011/GESI/output_video/{self.cfg.data_name}_simple/{self.cfg.video_name}_{idx}.mp4"
+        else:
+            output_path = f"/data2/wlsgur4011/GESI/output_video/{self.cfg.data_name}/{self.cfg.video_name}_{idx}.mp4"
         
-        stride = max(len(image_list_rewind), 150) // 150
-        save_video(image_list_rewind[::stride], output_path, fps=30)
-                
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        save_video(image_list[::stride], output_path, fps=30)
 
     def project_to_2d(self, points):
         if not hasattr(self, "data"):
@@ -1746,7 +1766,9 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             runner.run_compression(step=step)
         if cfg.single_finetune:
             if cfg.motion_video:
-                runner.make_motion_video()
+                runner.make_motion_video(idx=0, threhold_early_stop=1e-5, scheduler_step=500, min_rigid_coef=0)
+                # runner.make_motion_video(idx=1, threhold_early_stop=1e-5, scheduler_step=800, min_rigid_coef=0)
+                # runner.make_motion_video(idx=2, threhold_early_stop=1e-5, scheduler_step=500, min_rigid_coef=0.1)
             else:
                 runner.train_drag()
     else:
