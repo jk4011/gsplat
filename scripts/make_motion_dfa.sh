@@ -26,3 +26,4 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
     --disable_viewer \
     --skip_eval \
     --motion_video \
+    --video_name ${object_name}_${index_from}_${index_to} \

@@ -1,7 +1,7 @@
 #!/bin/bash
 SECONDS=0
 set -e        # exit when error
-set -o xtrace # print command
+# set -o xtrace # print command
 
 object_name=$1
 frame_index=$2
