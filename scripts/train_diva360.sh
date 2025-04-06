@@ -8,8 +8,13 @@ object_name=$2
 frame_index=$3
 # 0239 0217
 
+data_dir=/data2/wlsgur4011/GESI/gsplat/data/diva360_processed/${object_name}_${frame_index}/
+if [ ! -d $data_dir ]; then
+    bash scripts/preprocess_diva360.sh $object_name $frame_index | true
+fi
+
 CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
-    --data_dir /data2/wlsgur4011/GESI/gsplat/data/diva360_processed/${object_name}_${frame_index}/ \
+    --data_dir $data_dir \
     --result_dir ./results/diva360/${object_name}_${frame_index} \
     --data_factor 1 \
     --data_name diva360 \
