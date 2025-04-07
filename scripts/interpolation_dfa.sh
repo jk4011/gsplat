@@ -8,23 +8,21 @@ object_name="$2"
 
 declare -A idx_dict
 idx_dict["fox(attitude)"]="90 110 125 150 170"
-idx_dict["whiteTiger(run)"]="5 10 15 20 25"
-idx_dict["whiteTiger(roaringwalk)"]="0 5 10 15 20"
-idx_dict["wolf(Damage)"]="0 50 110 135 170"
+idx_dict["whiteTiger(run)"]="15 20 25 30 35"  # 5 10 15 20 25
+idx_dict["beagle_dog(s1_24fps)"]="300 320 345 355 360"
 idx_dict["wolf(Howling)"]="5 30 75 145 170"
-idx_dict["cat(walkprogressive_noz)"]="15 20 25 30 35"
-idx_dict["duck(eat_grass)"]="0 5 10 15 20"
-idx_dict["wolf(Walk)"]="70 80"
+idx_dict["duck(eat_grass)"]="0 10 20 55 60"
+idx_dict["panda(acting)"]="95 100 115 215 245"
 
 declare -A cam_dict
 cam_dict["fox(attitude)"]="32"
 cam_dict["whiteTiger(run)"]="32"
 cam_dict["whiteTiger(roaringwalk)"]="32"
-cam_dict["wolf(Damage)"]="32"
-cam_dict["wolf(Howling)"]="32"
+cam_dict["beagle_dog(s1_24fps)"]="32"
+cam_dict["wolf(Howlin g)"]="32"
 cam_dict["cat(walkprogressive_noz)"]="32"
 cam_dict["duck(eat_grass)"]="32"
-cam_dict["wolf(Walk)"]="32"
+cam_dict["panda(acting)"]="32"
 
 cam_idx=${cam_dict[$object_name]}
 idx_list=(${idx_dict[$object_name]})
@@ -84,7 +82,7 @@ for idx_to in ${idx_list[@]:1}; do
         --cam_idx $cam_idx \
         --motion_video \
         --video_name ${object_name}_${idx_start}_${idx_from}_${idx_to} \
-        --simple_video \
+        --simple_video
 
     ckpt=$result_dir/ckpt_finetune.pt
     idx_from=$idx_to

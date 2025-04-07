@@ -8,15 +8,13 @@ object_name=$2
 
 declare -A idx_dict
 idx_dict["wall_e"]="0222 0286 0303 0377 0387"
-idx_dict["k1_double_punch"]="0331 0339 0344 0346 0355"
 idx_dict["penguin"]="0047 0067 0160 0180 0654"
+idx_dict["dog"]="0177 0179 0181 0183 0261"
+idx_dict["trex"]="0002 0071 0125 0201 0321"
+idx_dict["wolf"]="0350 0359 0727 0735 0747"
+idx_dict["world_globe"]="0000 0035 0072 0108 0144"
 
-declare -A cam_dict
-cam_dict["wall_e"]="0"
-cam_dict["k1_double_punch"]="1"
-cam_dict["penguin"]="0"
-
-cam_idx=${cam_dict[$object_name]}
+cam_idx=0
 idx_list=(${idx_dict[$object_name]})
 
 for idx in ${idx_list[@]:0}; do
