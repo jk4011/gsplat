@@ -10,7 +10,7 @@ index_to=$4
 version=$5
 
 ckpt=./results/diva360/${object_name}_${index_from}/ckpts/ckpt_best_psnr.pt
-if [ ! -d $ckpt ]; then
+if [ ! -f $ckpt ]; then
     bash scripts/train_diva360.sh $GPU $object_name $index_from
 fi
 
