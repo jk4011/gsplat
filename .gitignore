@@ -139,3 +139,4 @@ wandb/
 tmp*
 temp*
 __pycache__
+output*
