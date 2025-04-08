@@ -7,7 +7,7 @@ sweep_config = {
     "method": "bayes",  # grid, random, bayes 중 선택
     "metric": {"name": "psnr_mean", "goal": "maximize"},
     "parameters": {
-        "n_anchor_list"        : {"values": [[300, 300, 300, 300, 300]]},
+        "n_anchor"             : {"values": [200, 250, 300, 400, 500]},
         "decay_rate"           : {"values": [1]},
         "coef_drag"            : {"values": [0.5, 1]},
         "coef_arap_drag"       : {"values": [1e3, 2e3, 5e3, 1e4, 2e4]},
@@ -42,7 +42,7 @@ best_config_dict = EasyDict({
         "lr_q": 0.03,
         "lr_t": 0.003,
         "min_inlier_ratio": 0.7,
-        "n_anchor_list": [300, 300, 300, 300, 300],
+        "n_anchor": 300,
         "rbf_gamma": 50,
         "reprojection_error": 6,
         "rigidity_k": 50,
@@ -61,7 +61,7 @@ best_config_dict = EasyDict({
         "lr_motion": 1e-3,
         "lr_q": 0.05,
         "lr_t": 0.01,
-        "n_anchor_list": [300, 300, 300, 300, 300],
+        "n_anchor": 300,
         "min_inlier_ratio": 0.7,
         "rbf_gamma": 50,
         "reprojection_error": 10,

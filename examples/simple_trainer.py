@@ -963,7 +963,7 @@ class Runner:
             self.eval(step=step)
 
         # get haraparameter
-        n_anchor_list        = self.hpara.n_anchor_list
+        n_anchor             = self.hpara.n_anchor
         coef_drag            = self.hpara.coef_drag
         coef_arap_drag       = self.hpara.coef_arap_drag
         coef_group_arap      = 0 if self.cfg.without_group else self.hpara.coef_group_arap
@@ -1032,25 +1032,24 @@ class Runner:
         from jhutil import color_log; color_log(3333, "initialize anchor and optimizer")
 
         # anchor = voxelize_pointcloud_and_get_means(points_3d, voxel_size=0.05)
-        anchor_all, anchor_indice_all = torch_fpsample.sample(points_3d.cpu(), n_anchor_list[-1])
+        anchor, anchor_indice = torch_fpsample.sample(points_3d.cpu(), n_anchor)
+        anchor = anchor.to(self.device)
 
-        anchor_all = anchor_all.to(self.device)
-
-        data_all = [anchor_all, anchor_indice_all, points_mask, drag_mask, points_2d, drag_target, drag_source, image_target, image_source, points_3d, self.data["K"], bbox]
+        data_all = [anchor, anchor_indice, points_mask, drag_mask, points_2d, drag_target, drag_source, image_target, image_source, points_3d, self.data["K"], bbox]
         torch.save(data_all, f"/tmp/.cache/data_all_{self.cfg.object_name}.pt")
 
-        N = anchor_all.shape[0]
+        N = anchor.shape[0]
         q_init = torch.tensor([1, 0, 0, 0], dtype=torch.float32, device=self.device)
         q_init = q_init.unsqueeze(0).repeat(N, 1, 1)
         t_init = torch.zeros((N, 3), dtype=torch.float32, device=self.device)
 
-        quats_all = nn.Parameter(q_init)  # (N, 3, 3)
-        t_all = nn.Parameter(t_init)  # (N, 3)
+        quats = nn.Parameter(q_init)  # (N, 3, 3)
+        t = nn.Parameter(t_init)  # (N, 3)
 
         anchor_optimizer = torch.optim.Adam(
             [
-                {"params": quats_all, "lr": lr_q},
-                {"params": t_all, "lr": lr_t},
+                {"params": quats, "lr": lr_q},
+                {"params": t, "lr": lr_t},
             ]
         )
 
@@ -1129,19 +1128,11 @@ class Runner:
         
         quats_origin = F.normalize(self.splats["quats"].clone().detach(), dim=-1)
         
+        with torch.no_grad():
+            distances, indices_knn = knn_jh(anchor, anchor, k=anchor_k)
+            weight = rbf_weight(distances, gamma=rbf_gamma)
+
         for i in tqdm(range(drag_iterations)):
-            
-            n_anchor = n_anchor_list[i // 100]
-            t = t_all[:n_anchor]
-            quats = quats_all[:n_anchor]
-            
-            anchor = anchor_all[:n_anchor]
-            anchor_indice = anchor_indice_all[:n_anchor]
-            anchor_group_id = group_id_all[anchor_indice]
-            
-            with torch.no_grad():
-                distances, indices_knn = knn_jh(anchor, anchor, k=anchor_k)
-                weight = rbf_weight(distances, gamma=rbf_gamma)
             
             R = quaternion_to_matrix(F.normalize(quats, dim=-1)).squeeze()  # (N, 3, 3)
             anchor_translated = anchor + t  # (N, 3)
@@ -1174,13 +1165,6 @@ class Runner:
             loss.backward(retain_graph=True)
             anchor_optimizer.step()
             anchor_optimizer.zero_grad()
-
-            if i % 100 == 99:
-                quats_all_lbs = quats_lbs[anchor_indice_all][:, None, :]
-                t_all_lbs = (points_lbs - points_3d)[anchor_indice_all]
-                
-                quats_all.data[n_anchor:] = quats_all_lbs[n_anchor:].detach()
-                t_all.data[n_anchor:] = t_all_lbs[n_anchor:].detach()
                 
             if wandb.run and not cfg.wandb_sweep:
                 wandb.log({
@@ -1209,7 +1193,7 @@ class Runner:
             self.eval(step=drag_iterations)
 
         # data for motion
-        motion_data = [points_init.detach(), quats_init.detach(), anchor_all.detach(), R.detach(), t_all.detach(), anchor_group_id, bbox]
+        motion_data = [points_init.detach(), quats_init.detach(), anchor.detach(), R.detach(), t.detach(), group_id_all, bbox]
         torch.save(motion_data, f"{self.cfg.result_dir}/motion_data.pt")
 
         # save checkpoint
@@ -1234,7 +1218,7 @@ class Runner:
     def make_motion_video(self, idx=0, n_iter=1000, threhold_early_stop=1e-5 , scheduler_step=300, min_rigid_coef=0):
 
         motion_data = torch.load(f"{self.cfg.result_dir}/motion_data.pt")
-        points_init, quats_init, anchor, R_goal, t_goal, anchor_group_id, bbox = motion_data
+        points_init, quats_init, anchor, R_goal, t_goal, group_id_all, bbox = motion_data
         self.splats["means"].data.copy_(points_init.detach())
         self.splats["quats"].data.copy_(quats_init.detach())
         
@@ -1287,9 +1271,6 @@ class Runner:
             anchor_translated = anchor + t  # (N, 3)
 
             loss_arap = arap_loss(anchor, anchor_translated, R, weight, indices_knn)
-            loss_group_arap = arap_loss_grouped(
-                anchor, anchor_translated, R, anchor_group_id
-            )
             loss_drag = loss_fn(R, R_goal) + loss_fn(t, t_goal)
             
             if loss_drag < threhold_early_stop:
@@ -1297,6 +1278,12 @@ class Runner:
 
             points_lbs, quats_lbs = linear_blend_skinning_knn(points_3d, anchor, R, t)
             updated_quaternions = quaternion_multiply(quats_lbs, quats_origin)
+
+            R_points = quaternion_to_matrix(F.normalize(quats_lbs, dim=-1)).squeeze()
+            loss_group_arap = arap_loss_grouped(
+                points_3d, points_lbs, R_points, group_id_all
+            )
+
             self.splats["means"].data.copy_(points_lbs)
             self.splats["quats"].data.copy_(updated_quaternions)
             
@@ -1766,7 +1753,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             runner.run_compression(step=step)
         if cfg.single_finetune:
             if cfg.motion_video:
-                runner.make_motion_video(idx=0, threhold_early_stop=1e-5, scheduler_step=500, min_rigid_coef=0)
+                runner.make_motion_video(idx=0, threhold_early_stop=5e-6, scheduler_step=500, min_rigid_coef=0)
                 # runner.make_motion_video(idx=1, threhold_early_stop=1e-5, scheduler_step=800, min_rigid_coef=0)
                 # runner.make_motion_video(idx=2, threhold_early_stop=1e-5, scheduler_step=500, min_rigid_coef=0.1)
             else:
