@@ -84,7 +84,7 @@ from gesi.roma import get_drag_roma
 import warnings
 import torch_fpsample
 from sweep_config import sweep_config, best_config_dict, SWEEP_WHOLE_ID
-from gesi.rigid_grouping import local_rigid_grouping, naive_rigid_grouping
+from gesi.rigid_grouping import local_rigid_grouping, naive_rigid_grouping, refine_rigid_group
 from jhutil import save_video
 from torch.nn import SmoothL1Loss
 from torch.optim.lr_scheduler import LambdaLR
@@ -233,6 +233,8 @@ class Config:
     wandb_sweep: bool = False
     
     without_group: bool = False
+
+    without_group_refine: bool = False
 
     naive_group: bool = False
     
@@ -979,6 +981,8 @@ class Runner:
         decay_rate           = self.hpara.decay_rate
         min_inlier_ratio     = self.hpara.min_inlier_ratio
         confidence           = self.hpara.confidence
+        refine_radius        = self.hpara.refine_radius
+        refine_threhold      = self.hpara.refine_threhold
         
         self.splats = dict(self.splats)
         points_init = self.splats["means"].clone().detach()
@@ -1132,7 +1136,7 @@ class Runner:
             distances, indices_knn = knn_jh(anchor, anchor, k=anchor_k)
             weight = rbf_weight(distances, gamma=rbf_gamma)
 
-        for i in tqdm(range(drag_iterations)):
+        for i in tqdm(range(drag_iterations + 1)):
             
             R = quaternion_to_matrix(F.normalize(quats, dim=-1)).squeeze()  # (N, 3, 3)
             anchor_translated = anchor + t  # (N, 3)
@@ -1165,6 +1169,16 @@ class Runner:
             loss.backward(retain_graph=True)
             anchor_optimizer.step()
             anchor_optimizer.zero_grad()
+
+            if not self.cfg.without_group_refine and i > 300 and i % 10 == 0:
+                group_id_all = refine_rigid_group(
+                    points_3d,
+                    points_lbs,
+                    group_id_all,
+                    R_points,
+                    radius=refine_radius,
+                    outlier_threhold=refine_threhold,
+                )
                 
             if wandb.run and not cfg.wandb_sweep:
                 wandb.log({
@@ -1187,10 +1201,28 @@ class Runner:
                         step=i,
                         commit=True,
                     )
+                # if i == drag_iterations:
+                #     new_groups = []
+                #     for i in range(group_id_all.max() + 1):
+                #         group = torch.where((group_id_all == i)[points_mask])[0]
+                #         if len(group) > 0:
+                #             new_groups.append(group)
+                #     group_image = show_groups(
+                #         img1[:3],
+                #         img2[:3],
+                #         drag_source_filtered,
+                #         drag_target_filtered,
+                #         groups=groups,
+                #         bbox=bbox,
+                #     )
+                #     wandb.log(
+                #         {"group_img_final": wandb.Image(group_image, caption="group_img_final")},
+                #         commit=True,
+                #     )
                 
 
         if not self.cfg.skip_eval:
-            self.eval(step=drag_iterations)
+            self.eval(step=drag_iterations+1)
 
         # data for motion
         motion_data = [points_init.detach(), quats_init.detach(), anchor.detach(), R.detach(), t.detach(), group_id_all, bbox]
@@ -1342,7 +1374,6 @@ class Runner:
         return means2d, depth
 
     def fectch_query_image(self):
-        
         device = self.device
         
         if not hasattr(self, "data"):
@@ -1852,11 +1883,13 @@ def run_all_data(cfg: Config):
             "trex" : ("0100", "0300"),
             "truck" : ("0078", "0171"),
             "wall_e" : ("0222", "0286"),
-            "wolf" : ("0000", "2393"),
+            "wolf" : ("0000", "0747"),
             "red_car" : ("0042", "0250"),
             "clock" : ("0000", "1500"),
             "world_globe" : ("0020", "0074"),
             "stirling" : ("0000", "0045"),
+            "hour_glass" : ("0000",  "1000"),
+            "tornado" : ("0000",  "0456"),
         }
         for object_name, (index_from, index_to) in image_indices.items():
             
