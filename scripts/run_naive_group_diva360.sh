@@ -7,7 +7,8 @@ GPU=$1
 object_name=$2
 index_from=$3
 index_to=$4
-version=$5
+cam_idx=$5
+version=$6
 
 CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
     --data_dir /data2/wlsgur4011/GESI/gsplat/data/diva360_processed/${object_name}_${index_to}/ \
@@ -18,10 +19,12 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
     --single_finetune \
     --port 8081 \
     --scale_reg 0.1 \
-    --object_name ${object_name} \
+    --object_name ${object_name}_[$index_from,$index_to] \
+    --cam_idx $cam_idx \
     --wandb \
     --wandb_group ${version} \
     --disable_viewer \
     --naive_group \
+    --without_group_refine \
 
 

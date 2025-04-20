@@ -5,6 +5,11 @@ set -e        # exit when error
 
 GPU=$1
 object_name="$2"
+rerun="$3"
+
+if [ -z "$rerun" ]; then
+    rerun=false
+fi
 
 declare -A idx_dict
 idx_dict["fox(attitude)"]="90 110 125 150 170"
@@ -19,7 +24,7 @@ cam_dict["fox(attitude)"]="32"
 cam_dict["whiteTiger(run)"]="32"
 cam_dict["whiteTiger(roaringwalk)"]="32"
 cam_dict["beagle_dog(s1_24fps)"]="32"
-cam_dict["wolf(Howlin g)"]="32"
+cam_dict["wolf(Howling)"]="32"
 cam_dict["cat(walkprogressive_noz)"]="32"
 cam_dict["duck(eat_grass)"]="32"
 cam_dict["panda(acting)"]="32"
@@ -40,7 +45,8 @@ fi
 
 for idx_to in ${idx_list[@]:1}; do
     result_dir=./results/dfa_finetune/${object_name}_${idx_start}_${idx_from}_${idx_to}
-    if [ ! -f $result_dir/ckpt_finetune.pt ]; then
+
+    if [ ! -f $result_dir/ckpt_finetune.pt ] || $rerun; then
         CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
             --data_dir /data2/wlsgur4011/GESI/gsplat/data/DFA_processed/${object_name}/${idx_to}/ \
             --result_dir $result_dir \

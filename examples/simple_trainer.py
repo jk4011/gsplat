@@ -53,7 +53,7 @@ sys.path.append("/data2/wlsgur4011/GESI/")
 sys.path.append("/data2/wlsgur4011/GESI/RoMa")
 
 import torch.nn as nn
-from gesi.loss import arap_loss, drag_loss, drot_loss, arap_loss_grouped
+from gesi.loss import arap_loss, drag_loss, arap_loss_grouped
 from gesi.mini_pytorch3d import quaternion_to_matrix
 from jhutil.algorithm import knn as knn_jh
 from gesi.helper import (
@@ -102,7 +102,7 @@ class Config:
     # Name of compression strategy to use
     compression: Optional[Literal["png"]] = None
     # Render trajectory path
-    render_traj_path: str = "interp"
+    render_traj_path: str = "ellipse"  # "interp", "ellipse", "spiral"
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
@@ -1035,11 +1035,13 @@ class Runner:
         ##########################################################
         from jhutil import color_log; color_log(3333, "initialize anchor and optimizer")
 
-        # anchor = voxelize_pointcloud_and_get_means(points_3d, voxel_size=0.05)
+        # anchor = voxelize_pointcloud_and_get_means(points_3d, voxel_size=0.04)
         anchor, anchor_indice = torch_fpsample.sample(points_3d.cpu(), n_anchor)
         anchor = anchor.to(self.device)
 
-        data_all = [anchor, anchor_indice, points_mask, drag_mask, points_2d, drag_target, drag_source, image_target, image_source, points_3d, self.data["K"], bbox]
+        camtoworlds = self.data["camtoworld"]
+        Ks = self.data["K"]
+        data_all = [anchor, points_mask, drag_mask, points_2d, drag_target, drag_source, image_target, image_source, points_3d, bbox, camtoworlds, Ks]
         torch.save(data_all, f"/tmp/.cache/data_all_{self.cfg.object_name}.pt")
 
         N = anchor.shape[0]
