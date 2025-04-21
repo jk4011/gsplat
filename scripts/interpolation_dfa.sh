@@ -13,7 +13,7 @@ fi
 
 declare -A idx_dict
 idx_dict["fox(attitude)"]="90 110 125 150 170"
-idx_dict["whiteTiger(run)"]="15 20 25 30 35"  # 5 10 15 20 25
+idx_dict["whiteTiger(run)"]="5 10 15 20 25"  # 5 10 15 20 25
 idx_dict["beagle_dog(s1_24fps)"]="300 320 345 355 360"
 idx_dict["wolf(Howling)"]="5 30 75 145 170"
 idx_dict["duck(eat_grass)"]="0 10 20 55 60"
@@ -97,19 +97,21 @@ done
 
 idx_from=${idx_list[0]}
 idx_to=${idx_list[1]}
-for idx_to in ${idx_list[@]:1}; do
-    video_path=/data2/wlsgur4011/GESI/output_video/DFA_simple/${object_name}_${idx_start}_${idx_from}_${idx_to}_0.mp4
-    video_paths="$video_paths ${video_path}"
-    idx_from=$idx_to
-done
+for i in {0..3}; do
+    for idx_to in ${idx_list[@]:1}; do
+        video_path=/data2/wlsgur4011/GESI/output_video/DFA_simple/${object_name}_${idx_start}_${idx_from}_${idx_to}_${i}.mp4
+        video_paths="$video_paths ${video_path}"
+        idx_from=$idx_to
+    done
 
-for idx in ${idx_list[@]:0}; do
-    image_path=/data2/wlsgur4011/GESI/gsplat/data/DFA_processed/${object_name}/${idx}/images/img_00${cam_idx}_rgba.png
-    image_paths="$image_paths ${image_path}"
-done
+    for idx in ${idx_list[@]:0}; do
+        image_path=/data2/wlsgur4011/GESI/gsplat/data/DFA_processed/${object_name}/${idx}/images/img_00${cam_idx}_rgba.png
+        image_paths="$image_paths ${image_path}"
+    done
 
-mkdir -p /data2/wlsgur4011/GESI/output_video_interpolated/dfa/ | true
-python ../gesi/video_integration.py \
-    --image_paths $image_paths \
-    --video_paths $video_paths \
-    --output_path /data2/wlsgur4011/GESI/output_video_interpolated/dfa/${object_name}.mp4
+    mkdir -p /data2/wlsgur4011/GESI/output_video_interpolated/dfa/ | true
+    python ../gesi/video_integration.py \
+        --image_paths $image_paths \
+        --video_paths $video_paths \
+        --output_path /data2/wlsgur4011/GESI/output_video_interpolated/dfa/${object_name}.mp4
+done
