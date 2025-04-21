@@ -414,6 +414,35 @@ class Dataset:
         return data
 
 
+def json_to_cam2world(json_path, transform):
+    # Extract extrinsic matrices in world-to-camera format.
+    w2c_mats = []
+
+    manager = SceneManagerDiva360(json_path)
+    manager.load_cameras_from_json()
+    manager.load_extrinsics_from_json()
+    manager.genrate_random_points3D()
+
+    bottom = np.array([0, 0, 0, 1]).reshape(1, 4)
+    imdata = manager.images
+    
+    for k in imdata:
+        im = imdata[k]
+        rot = im.R()
+        trans = im.tvec.reshape(3, 1)
+        w2c = np.concatenate([np.concatenate([rot, trans], 1), bottom], axis=0)
+        w2c_mats.append(w2c)
+
+    w2c_mats = np.stack(w2c_mats, axis=0)
+    # Convert extrinsics to camera-to-world.
+    camtoworlds = np.linalg.inv(w2c_mats)
+    # camtoworlds = camtoworlds[inds]
+
+    camtoworlds = transform_cameras(transform, camtoworlds)
+
+
+    return camtoworlds
+
 if __name__ == "__main__":
     import argparse
 

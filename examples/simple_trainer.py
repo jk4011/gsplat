@@ -17,7 +17,7 @@ import viser
 import yaml
 import wandb
 from easydict import EasyDict
-from datasets.colmap import Dataset, Parser
+from datasets.colmap import Dataset, Parser, json_to_cam2world
 from datasets.traj import (
     generate_interpolated_path,
     generate_ellipse_path_z,
@@ -101,6 +101,8 @@ class Config:
     ckpt: Optional[List[str]] = None
     # Name of compression strategy to use
     compression: Optional[Literal["png"]] = None
+
+    render_traj_all: bool = False
     # Render trajectory path
     render_traj_path: str = "ellipse"  # "interp", "ellipse", "spiral"
 
@@ -245,6 +247,9 @@ class Config:
     skip_eval: bool = False
 
     simple_video: bool = False
+
+    object_name: str = None
+
 
     def adjust_steps(self, factor: float):
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -1039,10 +1044,6 @@ class Runner:
         anchor, anchor_indice = torch_fpsample.sample(points_3d.cpu(), n_anchor)
         anchor = anchor.to(self.device)
 
-        camtoworlds = self.data["camtoworld"]
-        Ks = self.data["K"]
-        data_all = [anchor, points_mask, drag_mask, points_2d, drag_target, drag_source, image_target, image_source, points_3d, bbox, camtoworlds, Ks]
-        torch.save(data_all, f"/tmp/.cache/data_all_{self.cfg.object_name}.pt")
 
         N = anchor.shape[0]
         q_init = torch.tensor([1, 0, 0, 0], dtype=torch.float32, device=self.device)
@@ -1094,6 +1095,7 @@ class Runner:
             points_3d.shape[0], dtype=torch.long, device=self.device
         )
         group_id_all[points_mask] = groud_id
+        group_id_all_init = group_id_all.clone().detach()
 
         if wandb.run and not cfg.wandb_sweep:
             n_drag = len(drag_source)
@@ -1233,6 +1235,36 @@ class Runner:
         # save checkpoint
         data = {"step": step, "splats": (torch.nn.ParameterDict(self.splats).state_dict())}
         torch.save(data, f"{self.cfg.result_dir}/ckpt_finetune.pt")
+        print("save checkpoint to ", f"{self.cfg.result_dir}/ckpt_finetune.pt")
+
+
+        # data for anything
+        camtoworlds = self.data["camtoworld"]
+        Ks = self.data["K"]
+        data_all = {
+            "width" : self.width,
+            "height" : self.height,
+            "points_3d" : points_3d,
+            "points_2d" : points_2d,
+            "quats" : quats,
+            "opacities" : self.splats["opacities"],
+            "scales" : self.splats["scales"],
+            "sh0" : self.splats["sh0"],
+            "Ks" : Ks,
+            "camtoworlds" : camtoworlds,
+            "anchor" : anchor,
+            "points_mask" : points_mask,
+            "drag_mask" : drag_mask,
+            "drag_target" : drag_target,
+            "drag_source" : drag_source,
+            "image_target" : image_target,
+            "image_source" : image_source,
+            "bbox" : bbox,
+            "group_id_all_init" : group_id_all_init,
+            "group_id_all" : group_id_all
+        }
+        torch.save(data_all, f"/tmp/.cache/data_all_{self.cfg.object_name}.pt")
+
 
     def get_visibility_mask(self):
 
@@ -1649,7 +1681,7 @@ class Runner:
         torch.cuda.empty_cache()
         
     @torch.no_grad()
-    def render_traj(self, step: int):
+    def render_traj(self, step: int, with_depth=False):
         """Entry for trajectory rendering."""
         print("Running trajectory rendering...")
         cfg = self.cfg
@@ -1658,7 +1690,7 @@ class Runner:
         camtoworlds_all = self.parser.camtoworlds[5:-5]
         if cfg.render_traj_path == "interp":
             camtoworlds_all = generate_interpolated_path(
-                camtoworlds_all, 1
+                camtoworlds_all, 20
             )  # [N, 3, 4]
         elif cfg.render_traj_path == "ellipse":
             height = camtoworlds_all[:, 2, 3].mean()
@@ -1671,6 +1703,21 @@ class Runner:
                 bounds=self.parser.bounds * self.scene_scale,
                 spiral_scale_r=self.parser.extconf["spiral_radius_scale"],
             )
+        elif cfg.render_traj_path == "diva360_circle":
+            json_path = f"/data2/wlsgur4011/GESI/gsplat/data/Diva360_data/processed_data/{cfg.object_name}/transforms_circle.json"
+            camtoworlds_all = json_to_cam2world(json_path, self.parser.transform)
+            camtoworlds_all = generate_interpolated_path(
+                camtoworlds_all, 1
+            )  # [N, 3, 4]
+
+        elif cfg.render_traj_path == "diva360_spiral":
+            json_path = f"/data2/wlsgur4011/GESI/gsplat/data/Diva360_data/processed_data/{cfg.object_name}/transforms_spiral_hr.json"
+            camtoworlds_all = json_to_cam2world(json_path, self.parser.transform)
+            camtoworlds_all = generate_interpolated_path(
+                camtoworlds_all, 1
+            )  # [N, 3, 4]
+            camtoworlds_all = camtoworlds_all[:220]
+
         else:
             raise ValueError(
                 f"Render trajectory type not supported: {cfg.render_traj_path}"
@@ -1693,7 +1740,7 @@ class Runner:
         # save to video
         video_dir = f"{cfg.result_dir}/videos"
         os.makedirs(video_dir, exist_ok=True)
-        writer = imageio.get_writer(f"{video_dir}/traj_{step}.mp4", fps=30)
+        writer = imageio.get_writer(f"{video_dir}/traj_{step}_{self.cfg.render_traj_path}.mp4", fps=30)
         for i in tqdm(range(len(camtoworlds_all)), desc="Rendering trajectory"):
             camtoworlds = camtoworlds_all[i : i + 1]
             Ks = K[None]
@@ -1709,16 +1756,22 @@ class Runner:
                 render_mode="RGB+ED",
             )  # [1, H, W, 4]
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
-            depths = renders[..., 3:4]  # [1, H, W, 1]
-            depths = (depths - depths.min()) / (depths.max() - depths.min())
-            canvas_list = [colors, depths.repeat(1, 1, 1, 3)]
 
-            # write images
-            canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
-            canvas = (canvas * 255).astype(np.uint8)
+            if with_depth:
+                depths = renders[..., 3:4]  # [1, H, W, 1]
+                depths = (depths - depths.min()) / (depths.max() - depths.min())
+                canvas_list = [colors, depths.repeat(1, 1, 1, 3)]
+                canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
+                canvas = (canvas * 255).astype(np.uint8)
+            else:
+                canvas = colors.squeeze(0).cpu().numpy()
+                canvas = (canvas * 255).astype(np.uint8)
+
             writer.append_data(canvas)
         writer.close()
-        print(f"Video saved to {video_dir}/traj_{step}.mp4")
+
+        video_dir = os.path.abspath(video_dir)
+        print(f"Video saved to {video_dir}/traj_{step}_{self.cfg.render_traj_path}.mp4")
 
     @torch.no_grad()
     def run_compression(self, step: int):
@@ -1787,10 +1840,20 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         if cfg.single_finetune:
             if cfg.motion_video:
                 runner.make_motion_video(idx=0, threhold_early_stop=5e-6, scheduler_step=500, min_rigid_coef=0)
-                # runner.make_motion_video(idx=1, threhold_early_stop=1e-5, scheduler_step=800, min_rigid_coef=0)
-                # runner.make_motion_video(idx=2, threhold_early_stop=1e-5, scheduler_step=500, min_rigid_coef=0.1)
+                runner.make_motion_video(idx=1, threhold_early_stop=1e-5, scheduler_step=800, min_rigid_coef=0)
+                runner.make_motion_video(idx=2, threhold_early_stop=1e-5, scheduler_step=500, min_rigid_coef=0)
             else:
                 runner.train_drag()
+
+        if cfg.render_traj_all:
+            if cfg.data_name == "diva360":
+                traj_path_list = ["diva360_spiral"]  # "interp", "ellipse", "spiral"
+            elif cfg.data_name == "dfa":
+                traj_path_list = ["interp", "ellipse", "spiral"]
+            for render_traj_path in traj_path_list:
+                runner.cfg.render_traj_path = render_traj_path
+                runner.render_traj(step=step)
+
     else:
         runner.train()
 
