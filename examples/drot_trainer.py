@@ -2,7 +2,7 @@ from simple_trainer import *
 from simple_trainer import Runner
 
 import torch.nn as nn
-from gesi.loss import arap_loss, drag_loss, arap_loss_grouped
+from gesi.loss import arap_loss, arap_loss_rot, arap_loss_dist
 from gesi.mini_pytorch3d import quaternion_to_matrix
 from jhutil.algorithm import knn as knn_jh
 from gesi.helper import (
@@ -41,6 +41,7 @@ from torch.nn import SmoothL1Loss
 from torch.optim.lr_scheduler import LambdaLR
 from gesi.visibility import _fully_fused_projection2
 from gesi.torch_splat import render_uv_coordinate, render
+torch.autograd.set_detect_anomaly(True)
 
 warnings.simplefilter("ignore")
 # warnings.filterwarnings("ignore", category=DeprecationWarning) # certain warning
@@ -57,17 +58,16 @@ class DrotRunner(Runner):
     ) -> None:
 
         # get haraparameter
-        drot_iterations      = 3
+        drot_iterations      = 500
         coef_arap_drag       = self.hpara.coef_arap_drag
-        coef_rgb             = self.hpara.coef_rgb * 0.1
+        coef_rgb             = self.hpara.coef_rgb
         lr_q                 = self.hpara.lr_q
         lr_t                 = self.hpara.lr_t
         coef_drag            = 1
         coef_arap_drag       = 1e5
-        coef_arap_rgb        = 5e4
-        coef_mask_arap       = 10
-        coef_mask_rot        = 10
-        coef_mask_dist       = 10
+        coef_mask            = 10
+        coef_arap_rot        = 1e5
+        coef_arap_dist       = 1e5
         
         self.splats = dict(self.splats)
 
@@ -78,168 +78,149 @@ class DrotRunner(Runner):
         points = self.splats["means"].clone().detach()
         points.requires_grad = False
 
-        ##########################################################
-        ########### 1. initialize anchor and optimizer ###########
-        ##########################################################
-        anchor = voxelize_pointcloud_and_get_means(points, 0.04)
+        for stage in ["coarse", "fine"]:
+            ##########################################################
+            ########### 1. initialize anchor and optimizer ###########
+            ##########################################################
+            if stage == "coarse":
+                anchor = voxelize_pointcloud_and_get_means(points, 0.04)
+            elif stage == "fine":
+                anchor = self.splats["means"].clone().detach()
 
-        N = anchor.shape[0]
-        q_init = torch.tensor([1, 0, 0, 0], dtype=torch.float32, device=self.device)
-        q_init = q_init.unsqueeze(0).repeat(N, 1, 1)
-        t_init = torch.zeros((N, 3), dtype=torch.float32, device=self.device)
+            N = anchor.shape[0]
+            q_init = torch.tensor([1, 0, 0, 0], dtype=torch.float32, device=self.device)
+            q_init = q_init.unsqueeze(0).repeat(N, 1, 1)
+            t_init = torch.zeros((N, 3), dtype=torch.float32, device=self.device)
 
-        mask_arap_init = torch.ones((N, 1), dtype=torch.float32, device=self.device)
-        mask_rot_init = torch.ones((N, 1), dtype=torch.float32, device=self.device)
-        mask_dist_init = torch.ones((N, 1), dtype=torch.float32, device=self.device)
+            mask_arap_init = torch.ones((N, 1), dtype=torch.float32, device=self.device)
+            mask_rot_init = torch.ones((N, 1), dtype=torch.float32, device=self.device)
+            mask_dist_init = torch.ones((N, 1), dtype=torch.float32, device=self.device)
 
-        q = nn.Parameter(q_init)  # (N, 3, 3)
-        t = nn.Parameter(t_init)  # (N, 3)
-        mask_arap = nn.Parameter(mask_arap_init)  # (N, 3)
-        mask_rot = nn.Parameter(mask_rot_init)  # (N, 3)
-        mask_dist = nn.Parameter(mask_dist_init)  # (N, 3)
+            q = nn.Parameter(q_init)  # (N, 3, 3)
+            t = nn.Parameter(t_init)  # (N, 3)
+            mask_arap = nn.Parameter(mask_arap_init)  # (N, 3)
+            mask_rot = nn.Parameter(mask_rot_init)  # (N, 3)
+            mask_dist = nn.Parameter(mask_dist_init)  # (N, 3)
 
-        anchor_optimizer = torch.optim.Adam(
-            [
-                {"params": q, "lr": lr_q},
-                {"params": t, "lr": lr_t},
-            ]
-        )
+            anchor_optimizer = torch.optim.Adam(
+                [
+                    {"params": q, "lr": lr_q},
+                    {"params": t, "lr": lr_t},
+                ]
+            )
+            quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
 
-        with torch.no_grad():
-            # Eq.11 in "3D Gaussian Editing with A Single Image"
-            distances, indices_knn = knn_jh(anchor, anchor, k=5)
-            weight = rbf_weight(distances, gamma=30)
-
-            # Eq.12 in "3D Gaussian Editing with A Single Image"
-            weight = weight * torch.sigmoid(mask_arap)
-
-        quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
-
-        from jhutil import color_log; color_log("aaaa", "drot optimize start")
-
-        ##########################################################
-        ##################### 2. coarse stage ####################
-        ##########################################################
-        for i in tqdm(range(drot_iterations + 1)):
-            R = quaternion_to_matrix(F.normalize(q, dim=-1)).squeeze()  # (N, 3, 3)
-            anchor_translated = anchor + t  # (N, 3)
-
-            # Eq.10 in "3D Gaussian Editing with A Single Image"
-            loss_arap = arap_loss(anchor, anchor_translated, R, weight, indices_knn)
-
-            points_lbs, quats_lbs = linear_blend_skinning_knn(points, anchor, R, t)
-            quats_multiplied = quaternion_multiply(quats_lbs, quats_origin)
-
-            self.splats["means"] = points_lbs
-            self.splats["quats"] = quats_multiplied
-
+            ##########################################################
+            ##################### 2. optimization ####################
+            ##########################################################
 
             with torch.no_grad():
-                image_from, image_to = self.fetch_comparable_two_image()
+                # Eq.11 in "3D Gaussian Editing with A Single Image"
+                distances, indices_knn = knn_jh(anchor, anchor, k=5)
+                weight = rbf_weight(distances, gamma=30)
 
-            loss_drag = self.gesi_loss(image_from, image_to)
+            for i in tqdm(range(drot_iterations + 1)):
+                R = quaternion_to_matrix(F.normalize(q, dim=-1)).squeeze()  # (N, 3, 3)
+                anchor_translated = anchor + t  # (N, 3)
 
-            # means2d, depths = self.project_to_2d(points_lbs)
-            # target_indices = get_front_mask_by_depth(means2d, depths)
-            # means2d_target = means2d[target_indices]
-            # loss_drag = drot_loss_with_means2d(image_from, image_to, means2d_target)
+                # Eq.12 in "3D Gaussian Editing with A Single Image"
+                weight_arap = weight * torch.sigmoid(mask_arap)
+                weight_rot = weight * torch.sigmoid(mask_rot)
+                weight_dist = weight * torch.sigmoid(mask_dist)
 
-            # Eq.17 in "3D Gaussian Editing with A Single Image"
-            loss_mask_arap = (torch.sigmoid(mask_arap) - 1).abs().mean()
-            loss_mask_rot = (torch.sigmoid(mask_rot) - 1).abs().mean()
-            loss_mask_dist = (torch.sigmoid(mask_dist) - 1).abs().mean()
+                # Eq.10 in "3D Gaussian Editing with A Single Image"
+                loss_arap = arap_loss(anchor, anchor_translated, R, weight_arap, indices_knn)
 
-            loss = (
-                # Eq.18 in "3D Gaussian Editing with A Single Image"
-                loss_arap * coef_arap_drag +
-                loss_drag * coef_drag +
-                # Eq.19 in "3D Gaussian Editing with A Single Image"
-                loss_mask_rot * coef_mask_rot +
-                loss_mask_dist * coef_mask_dist +
-                loss_mask_arap * coef_mask_arap
-            )
+                if stage == "coarse":
+                    points_updated, quats_lbs = linear_blend_skinning_knn(points, anchor, R, t)
+                    quats_updated = quaternion_multiply(quats_lbs, quats_origin)
+                elif stage == "fine":
+                    points_updated = anchor
+                    q_normalized = F.normalize(q, dim=-1).squeeze()
+                    quats_updated = quaternion_multiply(quats_origin, q_normalized)
 
-            loss.backward(retain_graph=True)
-            anchor_optimizer.step()
-            anchor_optimizer.zero_grad()
+                self.splats["means"].data.copy_(points_updated)
+                self.splats["quats"].data.copy_(quats_updated)
 
-            wandb.log({"loss_arap": loss_arap, "loss_drag": loss_drag}, step=i, commit=True)
+                with torch.no_grad():
+                    image_from, image_to = self.fetch_comparable_two_image()
 
-            if i % 100 == 0:
-                image_source, image_target = self.fetch_comparable_two_image(
-                    return_rgba=True, return_shape="chw"
-                )
-                _, img1, img2 = crop_two_image_with_alpha(
-                    image_source, image_target
-                )
-                diff_img = get_img_diff(img1[:3], img2[:3])
-                wandb.log(
-                    {"train_img_diff": wandb.Image(diff_img, caption="train_img_diff")},
-                    step=i+1,
-                    commit=True,
-                )
+                loss_drag = self.gesi_loss(image_from, image_to, points_updated, quats_updated)
 
-        if not self.cfg.skip_eval:
-            step += drot_iterations
-            self.eval(step=step)
+                # Eq.13 in "3D Gaussian Editing with A Single Image"
+                loss_rot = arap_loss_rot(q, weight_rot, indices_knn)
+                # Eq.14 in "3D Gaussian Editing with A Single Image"
+                loss_dist = arap_loss_dist(anchor, anchor_translated, weight_dist, indices_knn)
 
-        ##########################################################
-        ###################### 3. fine stage #####################
-        ##########################################################
-        from jhutil import color_log; color_log("bbbb", "rgb optimize start")
+                # Eq.16 in "3D Gaussian Editing with A Single Image"
+                loss_rgb = self.render_and_calc_rgb_loss()
+                loss_match = loss_rgb * coef_rgb + loss_drag * coef_drag
 
-        means_origin = self.splats['means'].clone().detach()
-        quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
-        quats_origin_invert = quaternion_invert(quats_origin)
-        with torch.no_grad():
-            distances, indices_knn = knn_jh(means_origin, means_origin, k=5)
-            weight = rbf_weight(distances, gamma=30)
+                # Eq.17 in "3D Gaussian Editing with A Single Image"
+                loss_mask_arap = (torch.sigmoid(mask_arap) - 1).abs().mean()
+                loss_mask_rot = (torch.sigmoid(mask_rot) - 1).abs().mean()
+                loss_mask_dist = (torch.sigmoid(mask_dist) - 1).abs().mean()
 
-        for i in tqdm(range(rgb_iteration)):
-            quats_current = F.normalize(self.splats['quats'], dim=-1)
-            q = quaternion_multiply(quats_current, quats_origin_invert)
-            R = quaternion_to_matrix(q).squeeze()  # (N, 3, 3)
-            # arap_loss(anchor, anchor_translated, R, weight, indices_knn)
-            loss_rgb = self.render_and_calc_rgb_loss()
-            loss_arap = arap_loss(means_origin, self.splats['means'], R, weight, indices_knn)
-
-            loss = coef_arap_rgb * loss_arap # + loss_rgb * coef_rgb
-            loss.backward(retain_graph=True)
-
-            for var_name in ['means', 'quats']:
-                optimizer = self.optimizers[var_name]
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
-            
-            if i % 100 == 0:
-                image_source, image_target = self.fetch_comparable_two_image(
-                    return_rgba=True, return_shape="chw"
-                )
-                _, img1, img2 = crop_two_image_with_alpha(
-                    image_source, image_target
-                )
-                diff_img = get_img_diff(img1[:3], img2[:3])
-                wandb.log(
-                    {"train_img_diff": wandb.Image(diff_img, caption="train_img_diff")},
-                    step=i+drot_iterations+1,
-                    commit=True,
+                loss = (
+                    # Eq.18 in "3D Gaussian Editing with A Single Image"
+                    loss_match +
+                    loss_arap * coef_arap_drag +
+                    # Eq.19 in "3D Gaussian Editing with A Single Image"
+                    loss_rot * coef_arap_rot +
+                    loss_dist * coef_arap_dist +
+                    (loss_mask_rot + loss_mask_dist + loss_mask_arap) * coef_mask
                 )
 
-        if not self.cfg.skip_eval:
-            step += rgb_iteration
-            self.eval(step=step)
+                loss.backward()
+                anchor_optimizer.step()
+                anchor_optimizer.zero_grad()
+
+                wandb.log({"loss_arap": loss_arap, "loss_drag": loss_drag}, step=i, commit=True)
+
+                if i % 100 == 0:
+                    image_source, image_target = self.fetch_comparable_two_image(
+                        return_rgba=True, return_shape="chw"
+                    )
+                    _, img1, img2 = crop_two_image_with_alpha(
+                        image_source, image_target
+                    )
+                    diff_img = get_img_diff(img1[:3], img2[:3])
+                    wandb.log(
+                        {"train_img_diff": wandb.Image(diff_img, caption="train_img_diff")},
+                        step=i+1,
+                        commit=True,
+                    )
+
+            if not self.cfg.skip_eval:
+                step += drot_iterations
+                self.eval(step=step)
 
 
-    def gesi_loss(self, image_from, image_to):
+    def render_and_calc_rgb_loss(self):
+        renders, gt_images = self.fetch_comparable_two_image()
+        if renders.shape[-1] == 4:
+            colors, depths = renders[..., 0:3], renders[..., 3:4]
+        else:
+            colors, depths = renders, None
+
+        l1loss = F.l1_loss(colors, gt_images)
+        ssimloss = 1.0 - fused_ssim(
+            colors.permute(0, 3, 1, 2), gt_images.permute(0, 3, 1, 2), padding="valid"
+        )
+        loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
+
+        return loss
+
+    def gesi_loss(self, image_from, image_to, means3d, quats):
 
         camtoworlds = self.data["camtoworld"].to(self.device)
         Ks = self.data["K"].to(self.device)
         width = image_from.shape[2]
         height = image_from.shape[1]
-        means3d = self.splats["means"]
+        # means3d = self.splats["means"]
         opacities = self.splats["opacities"]
         scales = self.splats["scales"]
-        quats = self.splats["quats"]
+        # quats = self.splats["quats"]
 
         # cam_origin = camtoworlds[:, :3, 3]
         viewmats = torch.linalg.inv(camtoworlds)
