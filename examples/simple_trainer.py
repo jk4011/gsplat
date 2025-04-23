@@ -961,9 +961,7 @@ class Runner:
     def train_drag(
         self,
         drag_iterations=500,
-        rgb_iteration=500,
         filter_distance=1,
-        rgb_optimize=False,
     ) -> None:
         if not self.cfg.skip_eval:
             step = 0
@@ -1040,8 +1038,8 @@ class Runner:
         ##########################################################
         from jhutil import color_log; color_log(3333, "initialize anchor and optimizer")
 
-        # anchor = voxelize_pointcloud_and_get_means(points_3d, voxel_size=0.04)
-        anchor, anchor_indice = torch_fpsample.sample(points_3d.cpu(), n_anchor)
+        anchor = voxelize_pointcloud_and_get_means(points_3d, voxel_size=0.04)
+        # anchor, anchor_indice = torch_fpsample.sample(points_3d.cpu(), n_anchor)
         anchor = anchor.to(self.device)
 
 
@@ -1205,24 +1203,6 @@ class Runner:
                         step=i,
                         commit=True,
                     )
-                # if i == drag_iterations:
-                #     new_groups = []
-                #     for i in range(group_id_all.max() + 1):
-                #         group = torch.where((group_id_all == i)[points_mask])[0]
-                #         if len(group) > 0:
-                #             new_groups.append(group)
-                #     group_image = show_groups(
-                #         img1[:3],
-                #         img2[:3],
-                #         drag_source_filtered,
-                #         drag_target_filtered,
-                #         groups=groups,
-                #         bbox=bbox,
-                #     )
-                #     wandb.log(
-                #         {"group_img_final": wandb.Image(group_image, caption="group_img_final")},
-                #         commit=True,
-                #     )
                 
 
         if not self.cfg.skip_eval:
@@ -1233,7 +1213,7 @@ class Runner:
         torch.save(motion_data, f"{self.cfg.result_dir}/motion_data.pt")
 
         # save checkpoint
-        data = {"step": step, "splats": (torch.nn.ParameterDict(self.splats).state_dict())}
+        data = {"step": step, "splats": (torch.nn.ParameterDict(self.splats).state_dict()), "group_id_all": group_id_all, "group_id_all_init": group_id_all_init}
         torch.save(data, f"{self.cfg.result_dir}/ckpt_finetune.pt")
         print("save checkpoint to ", f"{self.cfg.result_dir}/ckpt_finetune.pt")
 
@@ -1530,10 +1510,10 @@ class Runner:
             width=width,
             height=height,
             sh_degree=3,
-            near_plane=cfg.near_plane,
-            far_plane=cfg.far_plane,
+            near_plane=self.cfg.near_plane,
+            far_plane=self.cfg.far_plane,
             image_ids=image_ids,
-            render_mode="RGB+ED" if cfg.depth_loss else "RGB",
+            render_mode="RGB+ED" if self.cfg.depth_loss else "RGB",
             masks=masks,
         )
         # TODO: get max matching images
@@ -1680,12 +1660,32 @@ class Runner:
             
         torch.cuda.empty_cache()
         
+    def update_sh_with_group_id(self, group_id_all):
+        from gesi.torch_splat import rgb_to_sh
+        from jhutil import PALATTE
+
+        sh0 = torch.zeros_like(self.splats["sh0"])
+        # sh0 = rgb_to_sh()
+        for i in range(0, group_id_all.max() + 1):
+            group_id = group_id_all == i
+            if group_id.sum() == 0:
+                continue
+            rgb = torch.tensor(PALATTE[i], device=self.device).float() / 255.0
+            rgb = rgb.unsqueeze(0).repeat(group_id.sum(), 1)
+            sh0[group_id] = rgb_to_sh(rgb)
+
+        self.splats["sh0"] = sh0
+        
+
     @torch.no_grad()
-    def render_traj(self, step: int, with_depth=False):
+    def render_traj(self, step, group_id_all=None, with_depth=False, video_path="/data2/wlsgur4011/GESI/output_video_traj/output.mp4"):
         """Entry for trajectory rendering."""
         print("Running trajectory rendering...")
         cfg = self.cfg
         device = self.device
+
+        if group_id_all is not None:
+            self.update_sh_with_group_id(group_id_all)
 
         camtoworlds_all = self.parser.camtoworlds[5:-5]
         if cfg.render_traj_path == "interp":
@@ -1716,7 +1716,7 @@ class Runner:
             camtoworlds_all = generate_interpolated_path(
                 camtoworlds_all, 1
             )  # [N, 3, 4]
-            camtoworlds_all = camtoworlds_all[:220]
+            camtoworlds_all = camtoworlds_all[0:220]
 
         else:
             raise ValueError(
@@ -1737,10 +1737,10 @@ class Runner:
         K = torch.from_numpy(list(self.parser.Ks_dict.values())[0]).float().to(device)
         width, height = list(self.parser.imsize_dict.values())[0]
 
-        # save to video
-        video_dir = f"{cfg.result_dir}/videos"
+        # video_dir from video_path
+        video_dir = os.path.dirname(video_path)
         os.makedirs(video_dir, exist_ok=True)
-        writer = imageio.get_writer(f"{video_dir}/traj_{step}_{self.cfg.render_traj_path}.mp4", fps=30)
+        writer = imageio.get_writer(video_path, fps=30)
         for i in tqdm(range(len(camtoworlds_all)), desc="Rendering trajectory"):
             camtoworlds = camtoworlds_all[i : i + 1]
             Ks = K[None]
@@ -1771,7 +1771,7 @@ class Runner:
         writer.close()
 
         video_dir = os.path.abspath(video_dir)
-        print(f"Video saved to {video_dir}/traj_{step}_{self.cfg.render_traj_path}.mp4")
+        print(f"Video saved to {video_path}")
 
     @torch.no_grad()
     def run_compression(self, step: int):
@@ -1852,7 +1852,23 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
                 traj_path_list = ["interp", "ellipse", "spiral"]
             for render_traj_path in traj_path_list:
                 runner.cfg.render_traj_path = render_traj_path
-                runner.render_traj(step=step)
+
+                video_dir = "/data2/wlsgur4011/GESI/output_video_traj"
+                video_paths = [
+                    f"{video_dir}/traj_{cfg.object_name}_{cfg.render_traj_path}.mp4",
+                    f"{video_dir}/traj_{cfg.object_name}_{cfg.render_traj_path}_init.mp4",
+                    f"{video_dir}/traj_{cfg.object_name}_{cfg.render_traj_path}_final.mp4"
+                ]
+                group_ids = [
+                    None,
+                    ckpts[0]["group_id_all_init"],
+                    ckpts[0]["group_id_all"],
+                ]
+                for i in range(3):
+                    group_id_all = group_ids[i]
+                    video_path = video_paths[i]
+                    runner.render_traj(step=step, group_id_all=group_id_all, video_path=video_path)
+                    runner.cfg.sh_degree = 0
 
     else:
         runner.train()
