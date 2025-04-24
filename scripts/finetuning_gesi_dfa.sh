@@ -15,7 +15,7 @@ if [ ! -f $ckpt ]; then
     bash scripts/train_dfa.sh $GPU $object_name $index_from
 fi
 
-CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
+CUDA_VISIBLE_DEVICES=$GPU python examples/drot_trainer.py default \
     --data_dir /data2/wlsgur4011/GESI/gsplat/data/DFA_processed/${object_name}/${index_to} \
     --result_dir ./results/dfa/${object_name}_finetune \
     --ckpt $ckpt \

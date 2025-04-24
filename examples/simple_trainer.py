@@ -986,6 +986,7 @@ class Runner:
         confidence           = self.hpara.confidence
         refine_radius        = self.hpara.refine_radius
         refine_threhold      = self.hpara.refine_threhold
+        voxel_size           = self.hpara.voxel_size
         
         self.splats = dict(self.splats)
         points_init = self.splats["means"].clone().detach()
@@ -1038,7 +1039,7 @@ class Runner:
         ##########################################################
         from jhutil import color_log; color_log(3333, "initialize anchor and optimizer")
 
-        anchor = voxelize_pointcloud_and_get_means(points_3d, voxel_size=0.04)
+        anchor = voxelize_pointcloud_and_get_means(points_3d, voxel_size=voxel_size)
         # anchor, anchor_indice = torch_fpsample.sample(points_3d.cpu(), n_anchor)
         anchor = anchor.to(self.device)
 
