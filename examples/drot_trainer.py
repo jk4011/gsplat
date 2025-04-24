@@ -56,13 +56,12 @@ class DrotRunner(Runner):
     def train_drag(self) -> None:
 
         # get haraparameter
-        shotten_by           = 1
-        drot_iterations      = 1
+        drot_iterations      = 500
         coef_arap_drag       = self.hpara.coef_arap_drag
         coef_rgb             = self.hpara.coef_rgb
-        lr_q                 = self.hpara.lr_q * shotten_by
-        lr_t                 = self.hpara.lr_t * shotten_by
-        lr_rest              = 2.5e-3 * shotten_by
+        lr_q                 = self.hpara.lr_q
+        lr_t                 = self.hpara.lr_t
+        lr_rest              = 2.5e-3
         coef_drag            = 1
         coef_arap_drag       = 1e5
         coef_mask            = 10
