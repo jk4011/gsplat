@@ -57,7 +57,7 @@ class DrotRunner(Runner):
 
         # get haraparameter
         shotten_by           = 1
-        drot_iterations      = 500 // shotten_by
+        drot_iterations      = 1
         coef_arap_drag       = self.hpara.coef_arap_drag
         coef_rgb             = self.hpara.coef_rgb
         lr_q                 = self.hpara.lr_q * shotten_by
@@ -189,7 +189,7 @@ class DrotRunner(Runner):
 
                 if stage == "fine":
                     loss_fine_reg = (
-                        (torch.sigmoid(self.splats["scale"]) / torch.sigmoid(scale_origin) - 1).abs().mean()
+                        (torch.sigmoid(self.splats["scales"]) / torch.sigmoid(scale_origin) - 1).abs().mean()
                         + (torch.sigmoid(self.splats["sh0"]) / torch.sigmoid(sh0_origin) - 1).abs().mean()
                     )
                     loss = loss + loss_fine_reg * coef_fine_reg
