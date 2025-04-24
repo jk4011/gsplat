@@ -1125,7 +1125,7 @@ class Runner:
                 wandb.Image(matching_image, caption="matching_image"),
                 wandb.Image(group_image, caption="group_image"),
             ]
-            wandb.log({"matching": images}, commit=True)
+            wandb.log({"matching": images})
 
         ##########################################################
         #################### 5. drag optimize ####################
@@ -1201,7 +1201,6 @@ class Runner:
                     wandb.log(
                         {"train_img_diff": wandb.Image(diff_img, caption="train_img_diff")},
                         step=i,
-                        commit=True,
                     )
                 
 
@@ -1478,7 +1477,7 @@ class Runner:
                 ]
                 wandb.log({f"matching_{i}": images})
 
-        wandb.log({"target_idx": target_idx}, commit=True)
+        wandb.log({"target_idx": target_idx})
             
         target_img = render_img_list[target_idx]
         self.target_campose = camtoworld_list[target_idx]
@@ -1634,7 +1633,7 @@ class Runner:
                     "lpips": stats["lpips"],
                     "img_diff": img_diffs,
                 }
-                wandb.log(logging_data, step=step, commit=True)
+                wandb.log(logging_data, step=step)
                 
             if cfg.wandb_sweep:
                 all_psnr_for_sweep[cfg.object_name] = stats["psnr"]

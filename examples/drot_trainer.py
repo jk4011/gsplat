@@ -47,27 +47,30 @@ warnings.simplefilter("ignore")
 # warnings.filterwarnings("ignore", category=DeprecationWarning) # certain warning
 
 
+def inverse_sigmoid(y, eps=1e-6):
+    y = torch.clamp(torch.tensor(y), eps, 1 - eps)  # 0이나 1에 너무 가까운 값 방지
+    return torch.log(y / (1 - y)).item()
 
-class DrotRunner(Runner):
-    
-    def train_drag(
-        self,
-        rgb_iteration=500,
-        filter_distance=1,
-        rgb_optimize=False,
-    ) -> None:
+
+class DrotRunner(Runner):    
+    def train_drag(self) -> None:
 
         # get haraparameter
-        drot_iterations      = 500
+        shotten_by           = 1
+        drot_iterations      = 500 // shotten_by
         coef_arap_drag       = self.hpara.coef_arap_drag
         coef_rgb             = self.hpara.coef_rgb
-        lr_q                 = self.hpara.lr_q
-        lr_t                 = self.hpara.lr_t
+        lr_q                 = self.hpara.lr_q * shotten_by
+        lr_t                 = self.hpara.lr_t * shotten_by
+        lr_rest              = 2.5e-3 * shotten_by
         coef_drag            = 1
         coef_arap_drag       = 1e5
         coef_mask            = 10
         coef_arap_rot        = 1e5
         coef_arap_dist       = 1e5
+        coef_fine_reg        = 1e5
+        min_thresh           = 0.1
+        min_mask_value = inverse_sigmoid(min_thresh)
         
         self.splats = dict(self.splats)
 
@@ -77,6 +80,11 @@ class DrotRunner(Runner):
 
         points = self.splats["means"].clone().detach()
         points.requires_grad = False
+
+        cur_step = 0
+
+        scale_origin = self.splats["scales"].clone().detach()
+        sh0_origin = self.splats["sh0"].clone().detach()
 
         for stage in ["coarse", "fine"]:
             ##########################################################
@@ -106,6 +114,9 @@ class DrotRunner(Runner):
                 [
                     {"params": q, "lr": lr_q},
                     {"params": t, "lr": lr_t},
+                    {"params": self.splats["opacities"], "lr": lr_rest},
+                    {"params": self.splats["scales"], "lr": lr_rest},
+                    {"params": self.splats["sh0"], "lr": lr_rest},
                 ]
             )
             quats_origin = F.normalize(self.splats['quats'].clone().detach(), dim=-1)
@@ -122,6 +133,11 @@ class DrotRunner(Runner):
             for i in tqdm(range(drot_iterations + 1)):
                 R = quaternion_to_matrix(F.normalize(q, dim=-1)).squeeze()  # (N, 3, 3)
                 anchor_translated = anchor + t  # (N, 3)
+
+                # Eq.15 in "3D Gaussian Editing with A Single Image
+                mask_arap.data.clamp_(min=min_mask_value)
+                mask_rot.data.clamp_(min=min_mask_value)
+                mask_dist.data.clamp_(min=min_mask_value)
 
                 # Eq.12 in "3D Gaussian Editing with A Single Image"
                 weight_arap = weight * torch.sigmoid(mask_arap)
@@ -145,7 +161,7 @@ class DrotRunner(Runner):
                 with torch.no_grad():
                     image_from, image_to = self.fetch_comparable_two_image()
 
-                loss_drag = self.gesi_loss(image_from, image_to, points_updated, quats_updated)
+                loss_drot = self.drot_loss_reparameter(image_from, image_to, points_updated, quats_updated)
 
                 # Eq.13 in "3D Gaussian Editing with A Single Image"
                 loss_rot = arap_loss_rot(q, weight_rot, indices_knn)
@@ -154,7 +170,7 @@ class DrotRunner(Runner):
 
                 # Eq.16 in "3D Gaussian Editing with A Single Image"
                 loss_rgb = self.render_and_calc_rgb_loss()
-                loss_match = loss_rgb * coef_rgb + loss_drag * coef_drag
+                loss_match = loss_rgb * coef_rgb + loss_drot * coef_drag
 
                 # Eq.17 in "3D Gaussian Editing with A Single Image"
                 loss_mask_arap = (torch.sigmoid(mask_arap) - 1).abs().mean()
@@ -171,13 +187,20 @@ class DrotRunner(Runner):
                     (loss_mask_rot + loss_mask_dist + loss_mask_arap) * coef_mask
                 )
 
+                if stage == "fine":
+                    loss_fine_reg = (
+                        (torch.sigmoid(self.splats["scale"]) / torch.sigmoid(scale_origin) - 1).abs().mean()
+                        + (torch.sigmoid(self.splats["sh0"]) / torch.sigmoid(sh0_origin) - 1).abs().mean()
+                    )
+                    loss = loss + loss_fine_reg * coef_fine_reg
+
                 loss.backward()
                 anchor_optimizer.step()
                 anchor_optimizer.zero_grad()
 
-                wandb.log({"loss_arap": loss_arap, "loss_drag": loss_drag}, step=i, commit=True)
-
-                if i % 100 == 0:
+                wandb.log({"loss_arap": loss_arap, "loss_drag": loss_drot}, step=cur_step)
+            
+                if cur_step % 100 == 0:
                     image_source, image_target = self.fetch_comparable_two_image(
                         return_rgba=True, return_shape="chw"
                     )
@@ -185,15 +208,12 @@ class DrotRunner(Runner):
                         image_source, image_target
                     )
                     diff_img = get_img_diff(img1[:3], img2[:3])
-                    wandb.log(
-                        {"train_img_diff": wandb.Image(diff_img, caption="train_img_diff")},
-                        step=i+1,
-                        commit=True,
-                    )
+                    wandb.log({"train_img_diff": wandb.Image(diff_img, caption="train_img_diff"),}, step=cur_step)
+                
+                cur_step += 1
 
             if not self.cfg.skip_eval:
-                step += drot_iterations
-                self.eval(step=step)
+                self.eval(step=cur_step)
 
 
     def render_and_calc_rgb_loss(self):
@@ -211,7 +231,7 @@ class DrotRunner(Runner):
 
         return loss
 
-    def gesi_loss(self, image_from, image_to, means3d, quats):
+    def drot_loss_reparameter(self, image_from, image_to, means3d, quats):
 
         camtoworlds = self.data["camtoworld"].to(self.device)
         Ks = self.data["K"].to(self.device)
@@ -240,7 +260,8 @@ class DrotRunner(Runner):
         uv = render_uv_coordinate(width, height, means2d, cov2d, opacities, depths)
 
         # Eq.6 in "3D Gaussian Editing with A Single Image"
-        return drot_loss(image_from, image_to, uv, downsample=2)
+        loss = drot_loss(image_from, image_to, uv, downsample=4)
+        return loss
 
 
 def main(local_rank: int, world_rank, world_size: int, cfg: Config):
