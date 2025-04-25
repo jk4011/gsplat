@@ -1,31 +1,31 @@
 import wandb
 from easydict import EasyDict
 
-SWEEP_WHOLE_ID = "jh11/GESI_sweep/uvrwj3xb"
+SWEEP_WHOLE_ID = "jh11/GESI_sweep/93jq309e"
 
 sweep_config = {
     "method": "bayes",  # grid, random, bayes 중 선택
     "metric": {"name": "psnr_mean", "goal": "maximize"},
     "parameters": {
-        "n_anchor"             : {"values": [200, 250, 300, 400, 500]},
-        "decay_rate"           : {"values": [1]},
-        "coef_drag"            : {"values": [0.5, 1, 2]},
-        "coef_arap_drag"       : {"values": [3000]},
+        "n_anchor"             : {"values": [300, 500]},
+        "coef_drag"            : {"values": [0.5, 1]},
+        "coef_arap_drag"       : {"values": [3000, 5000, 10000, 20000]},
         "coef_group_arap"      : {"values": [100, 200, 500, 1000, 2000]},
-        "coef_rgb"             : {"values": [50000]},
+        "coef_rgb"             : {"values": [2000, 5000, 10000, 20000, 50000]},
         "coef_drag_3d"         : {"values": [3000]},
         "lr_q"                 : {"values": [0.05]},
         "lr_t"                 : {"values": [0.01]},
-        "rigidity_k"           : {"values": [100]},
-        "reprojection_error"   : {"values": [10]},
-        "anchor_k"             : {"values": [15]},
+        "rigidity_k"           : {"values": [25, 50, 75, 100]},
+        "reprojection_error"   : {"values": [5, 7, 8, 10]},
+        "anchor_k"             : {"values": [10, 15]},
         "rbf_gamma"            : {"values": [50]},
         "cycle_threshold"      : {"values": [10]},
         "vis_threshold"        : {"values": [0.5]},
-        "min_inlier_ratio"     : {"values": [0.7]},
+        "min_inlier_ratio"     : {"values": [0.5, 0.6, 0.7, 0.8]},
         "confidence"           : {"values": [0.97, 0.98, 0.99]},
         "refine_radius"        : {"values": [0.03, 0.05, 0.07, 0.10]},
-        "refine_threhold"      : {"values": [0.005, 0.01, 0.02, 0.03]},
+        "refine_threhold"      : {"values": [0.002, 0.005, 0.01, 0.02, 0.03, 0.05]},
+        "voxel_size"           : {"values": [0.02, 0.03, 0.04, 0.05, 0.06]},
     },
 }
 
@@ -39,7 +39,6 @@ best_config_dict = EasyDict({
         "coef_rgb": 5000,
         "confidence": 0.99,
         "cycle_threshold": 10,
-        "decay_rate": 1,
         "lr_motion": 3e-4,
         "lr_q": 0.03,
         "lr_t": 0.003,
@@ -62,7 +61,6 @@ best_config_dict = EasyDict({
         "coef_rgb": 50000,
         "confidence": 0.97,
         "cycle_threshold": 10,
-        "decay_rate": 1,
         "lr_motion": 1e-3,
         "lr_q": 0.05,
         "lr_t": 0.01,

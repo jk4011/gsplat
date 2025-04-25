@@ -21,5 +21,5 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
     --port 8081 \
     --scale_reg 0.1 \
     --disable_viewer \
-    # --random_bkgd \
+    --random_bkgd \
     
