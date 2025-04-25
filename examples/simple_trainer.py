@@ -85,7 +85,7 @@ import warnings
 import torch_fpsample
 from sweep_config import sweep_config, best_config_dict, SWEEP_WHOLE_ID
 from gesi.rigid_grouping import local_rigid_grouping, naive_rigid_grouping, refine_rigid_group
-from jhutil import save_video
+from jhutil import save_video, bkgd2white
 from torch.nn import SmoothL1Loss
 from torch.optim.lr_scheduler import LambdaLR
 
@@ -692,6 +692,7 @@ class Runner:
             camtoworlds = camtoworlds_gt = data["camtoworld"].to(device)  # [1, 4, 4]
             Ks = data["K"].to(device)  # [1, 3, 3]
             pixels = data["image"].to(device) / 255.0  # [1, H, W, 3]
+            alphas_gt = data["alpha"].to(device) / 255.0  # [1, H, W, 3]
             num_train_rays_per_step = (
                 pixels.shape[0] * pixels.shape[1] * pixels.shape[2]
             )
@@ -742,6 +743,7 @@ class Runner:
             if cfg.random_bkgd:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
+                pixels = pixels + bkgd * (1.0 - alphas_gt)
 
             self.cfg.strategy.step_pre_backward(
                 params=self.splats,
@@ -954,6 +956,24 @@ class Runner:
                 self.viewer.state.num_train_rays_per_sec = num_train_rays_per_sec
                 # Update the scene.
                 self.viewer.update(step, num_train_rays_per_step)
+            
+            if wandb.run and not cfg.wandb_sweep:
+                if step % 1000 == 999:
+                    image_source, image_target = self.fetch_comparable_two_image(
+                        return_rgba=True, return_shape="chw"
+                    )
+                    _, img1, img2 = crop_two_image_with_alpha(
+                        image_source, image_target
+                    )
+                    diff_img = get_img_diff(img1[:3], img2[:3])
+                    diff_img_white = get_img_diff(bkgd2white(img1), bkgd2white(img2))
+                    
+                    wandb.log(
+                        {"train_diff": [
+                            wandb.Image(diff_img, caption="train_diff"),
+                            wandb.Image(diff_img_white, caption="train_diff_white")
+                        ]}, step=step,
+                    )
 
     def train_drag(
         self,
@@ -965,7 +985,6 @@ class Runner:
             self.eval(step=step)
 
         # get haraparameter
-        n_anchor             = self.hpara.n_anchor
         coef_drag            = self.hpara.coef_drag
         coef_arap_drag       = self.hpara.coef_arap_drag
         coef_group_arap      = 0 if self.cfg.without_group else self.hpara.coef_group_arap
@@ -978,7 +997,6 @@ class Runner:
         anchor_k             = self.hpara.anchor_k
         rbf_gamma            = self.hpara.rbf_gamma
         cycle_threshold      = self.hpara.cycle_threshold
-        decay_rate           = self.hpara.decay_rate
         min_inlier_ratio     = self.hpara.min_inlier_ratio
         confidence           = self.hpara.confidence
         refine_radius        = self.hpara.refine_radius
@@ -1160,7 +1178,7 @@ class Runner:
             loss_rgb = self.render_and_calc_rgb_loss() if i > 300 else 0
 
             loss = (
-                (decay_rate ** i * coef_drag) * loss_drag
+                coef_drag * loss_drag
                 + coef_arap_drag * loss_arap
                 + coef_group_arap * loss_group_arap
                 + coef_rgb * loss_rgb
@@ -1196,9 +1214,16 @@ class Runner:
                         image_source, image_target
                     )
                     diff_img = get_img_diff(img1[:3], img2[:3])
+
+                    img1_white = (img1[:3] + (1 - img1[3])[None, :])
+                    img2_white = (img2[:3] + (1 - img2[3])[None, :])
+                    diff_img_white = get_img_diff(img1_white[:3], img2_white[:3])
+                    
                     wandb.log(
-                        {"train_img_diff": wandb.Image(diff_img, caption="train_img_diff")},
-                        step=i,
+                        {"train_diff": [
+                            wandb.Image(diff_img, caption="train_diff"),
+                            wandb.Image(diff_img_white, caption="train_diff_white"),
+                        ]}, step=i,
                     )
                 
 
@@ -1423,7 +1448,6 @@ class Runner:
                 near_plane=cfg.near_plane,
                 far_plane=cfg.far_plane,
                 image_ids=image_ids,
-                render_mode="RGB+ED" if cfg.depth_loss else "RGB",
                 masks=masks,
             )
             render_img = torch.concat([renders, alphas], dim=-1)
@@ -1554,16 +1578,20 @@ class Runner:
         ellipse_time = 0
         metrics = defaultdict(list)
         img_diff_list = []
+        white_img_diff_list = []
         for i, data in enumerate(valloader):
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
-            pixels = data["image"].to(device) / 255.0
+            img = data["image"].to(device) / 255.0
+            alpha = data["alpha"].to(device) / 255.0
+            pixels = torch.concat([img, alpha], dim=-1)
+            
             masks = data["mask"].to(device) if "mask" in data else None
             height, width = pixels.shape[1:3]
 
             torch.cuda.synchronize()
             tic = time.time()
-            colors, _, _ = self.rasterize_splats(
+            colors, alpha, _ = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
                 width=width,
@@ -1573,6 +1601,7 @@ class Runner:
                 far_plane=cfg.far_plane,
                 masks=masks,
             )  # [1, H, W, 3]
+            colors = torch.concat([colors, alpha], dim=-1)
             torch.cuda.synchronize()
             ellipse_time += time.time() - tic
 
@@ -1588,14 +1617,16 @@ class Runner:
                     canvas,
                 )
 
-                pixels_p = pixels.permute(0, 3, 1, 2)  # [1, 3, H, W]
-                colors_p = colors.permute(0, 3, 1, 2)  # [1, 3, H, W]
+                pixels_p = pixels.permute(0, 3, 1, 2)  # [1, 4, H, W]
+                colors_p = colors.permute(0, 3, 1, 2)  # [1, 4, H, W]
                 try:
-                    _, img1, img2 = crop_two_image_with_background(colors_p[0], pixels_p[0])
+                    _, img1, img2 = crop_two_image_with_alpha(colors_p[0], pixels_p[0])
                 except:
                     continue
                 img_diff_list.append(get_img_diff(img1, img2))
-
+                white_img_diff_list.append(get_img_diff(bkgd2white(img1), bkgd2white(img2)))
+                colors_p = colors_p[:, :3]
+                pixels_p = pixels_p[:, :3]
                 metrics["psnr"].append(self.psnr(colors_p, pixels_p))
                 metrics["ssim"].append(self.ssim(colors_p, pixels_p))
                 metrics["lpips"].append(self.lpips(colors_p, pixels_p))
@@ -1625,11 +1656,17 @@ class Runner:
                     wandb.Image(img_diff_list[5], caption="05"),
                     wandb.Image(img_diff_list[10], caption="10"),
                 ]
+                white_img_diffs = [
+                    wandb.Image(white_img_diff_list[0], caption="00"),
+                    wandb.Image(white_img_diff_list[5], caption="05"),
+                    wandb.Image(white_img_diff_list[10], caption="10"),
+                ]
                 logging_data = {
                     "psnr": stats["psnr"],
                     "ssim": stats["ssim"],
                     "lpips": stats["lpips"],
                     "img_diff": img_diffs,
+                    "white_img_diffs": white_img_diffs,
                 }
                 wandb.log(logging_data, step=step)
                 
@@ -1954,31 +1991,32 @@ def run_all_data(cfg: Config):
     
     elif cfg.data_name == "diva360":
         image_indices = {
-            "blue_car" : ("0142", "0214"),
-            "bunny" : ("0000", "1000"),
-            "dog" : ("0177", "0279"),
-            "k1_double_punch" : ("0000", "0555"),
-            "horse" : ("0120", "0375"),
-            "k1_hand_stand" : ("0000", "0300"),
-            "k1_push_up" : ("0370", "0398"),
-            "music_box" : ("0100", "0125"),
-            "penguin" : ("0217", "0239"),
-            "trex" : ("0100", "0300"),
-            "truck" : ("0078", "0171"),
-            "wall_e" : ("0222", "0286"),
-            "wolf" : ("0000", "0747"),
-            "red_car" : ("0042", "0250"),
-            "clock" : ("0000", "1500"),
-            "world_globe" : ("0020", "0074"),
-            "stirling" : ("0000", "0045"),
-            "hour_glass" : ("0000",  "1000"),
-            "tornado" : ("0000",  "0456"),
+            "blue_car" : ("00", "0142", "0214"),
+            "bunny" : ("00", "0000", "1000"),
+            "dog" : ("00", "0177", "0279"),
+            "horse" : ("00", "0120", "0375"),
+            "k1_double_punch" :  ("01", "0270", "0282"),
+            "k1_hand_stand" :  ("01", "0412", "0426"),
+            "k1_push_up" :  ("01", "0541", "0557"),
+            "music_box" : ("00", "0100", "0125"),
+            "penguin" : ("00", "0217", "0239"),
+            "hour_glass" :  ("00", "0100", "0200"),
+            "wolf" :  ("00", "0357", "1953"),
+            "trex" :  ("00", "0135", "0250"),
+            "truck" : ("00", "0078", "0171"),
+            "wall_e" : ("00", "0222", "0286"),
+            "red_car" : ("00", "0042", "0250"),
+            "clock" : ("00", "0000", "1500"),
+            "world_globe" : ("00", "0020", "0074"),
+            "stirling" : ("00", "0000", "0045"),
+            "tornado" : ("00", "0000",  "0456"),
         }
-        for object_name, (index_from, index_to) in image_indices.items():
+        for object_name, (cam_idx, index_from, index_to) in image_indices.items():
             
             data_dir = f"/data2/wlsgur4011/GESI/gsplat/data/diva360_processed/{object_name}_{index_to}/"
             ckpt = [f"./results/diva360/{object_name}_{index_from}/ckpts/ckpt_best_psnr.pt"]
             result_dir = f"./results/diva360/{object_name}_sweep"
+            cfg.cam_idx = int(cam_idx)
             cfg.result_dir = result_dir
             cfg.object_name = object_name
             cfg.data_dir = data_dir
