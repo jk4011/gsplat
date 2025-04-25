@@ -20,7 +20,7 @@ if [ ! -f $ckpt ]; then
     bash scripts/train_diva360.sh $GPU $object_name $index_from
 fi
 
-CUDA_VISIBLE_DEVICES=$GPU python examples/drot_trainer.py default \
+CUDA_VISIBLE_DEVICES=$GPU python examples/gesi_trainer.py default \
     --data_dir $data_dir \
     --result_dir ./results/diva360_finetune/${object_name}_${index_from}_${index_to} \
     --ckpt ./results/diva360/${object_name}_${index_from}/ckpts/ckpt_best_psnr.pt \
