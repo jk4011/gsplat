@@ -61,14 +61,18 @@ class DrotRunner(Runner):
         coef_rgb             = self.hpara.coef_rgb
         lr_q                 = self.hpara.lr_q
         lr_t                 = self.hpara.lr_t
-        lr_rest              = 2.5e-3
         coef_drag            = 1
-        coef_arap_drag       = 1e5
+        coef_arap_drag       = 1e4
         coef_mask            = 10
         coef_arap_rot        = 1e5
         coef_arap_dist       = 1e5
-        coef_fine_reg        = 1e5
+        coef_fine_reg        = 1e4
         min_thresh           = 0.1
+        deform_only          = True
+        if deform_only:
+            lr_rest = 0
+        else:
+            lr_rest = 2.5e-3
         min_mask_value = inverse_sigmoid(min_thresh)
         
         self.splats = dict(self.splats)
