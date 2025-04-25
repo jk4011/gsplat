@@ -74,7 +74,7 @@ best_config_dict = EasyDict({
         "vis_threshold": 0.5,
         "refine_radius": 0.03,
         "refine_threhold": 0.01,
-        "voxel_size": 0.02,
+        "voxel_size": 0.04,
     }
 })
 

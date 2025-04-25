@@ -248,7 +248,7 @@ class Config:
 
     simple_video: bool = False
 
-    object_name: str = None
+    finetune_with_only_rgb: bool = False
 
 
     def adjust_steps(self, factor: float):
@@ -631,10 +631,7 @@ class Runner:
                 yaml.dump(vars(cfg), f)
 
         max_steps = cfg.max_steps
-        if cfg.single_finetune:
-            init_step = 30000
-        else:
-            init_step = 0
+        init_step = 0
 
         schedulers = [
             # means has a learning rate schedule, that end at 0.01 of the initial value
@@ -1226,7 +1223,7 @@ class Runner:
             "height" : self.height,
             "points_3d" : points_3d,
             "points_2d" : points_2d,
-            "quats" : quats,
+            "quats" : self.splats["quats"],
             "opacities" : self.splats["opacities"],
             "scales" : self.splats["scales"],
             "sh0" : self.splats["sh0"],
@@ -1838,12 +1835,17 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         if cfg.compression is not None:
             runner.run_compression(step=step)
         if cfg.single_finetune:
-            if cfg.motion_video:
+
+            if cfg.finetune_with_only_rgb:
+                runner.cfg.max_steps = 3000
+                runner.train()
+            elif cfg.motion_video:
                 runner.make_motion_video(idx=0, threhold_early_stop=5e-6, scheduler_step=500, min_rigid_coef=0)
                 runner.make_motion_video(idx=1, threhold_early_stop=1e-5, scheduler_step=800, min_rigid_coef=0)
                 runner.make_motion_video(idx=2, threhold_early_stop=1e-5, scheduler_step=500, min_rigid_coef=0)
             else:
                 runner.train_drag()
+        
 
         if cfg.render_traj_all:
             if cfg.data_name == "diva360":
