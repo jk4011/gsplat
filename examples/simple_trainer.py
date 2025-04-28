@@ -958,7 +958,7 @@ class Runner:
                 self.viewer.update(step, num_train_rays_per_step)
             
             if wandb.run and not cfg.wandb_sweep:
-                if step % 1000 == 999:
+                if step % 100 == 99:
                     image_source, image_target = self.fetch_comparable_two_image(
                         return_rgba=True, return_shape="chw"
                     )
@@ -978,7 +978,6 @@ class Runner:
     def train_drag(
         self,
         drag_iterations=500,
-        filter_distance=1,
     ) -> None:
         if not self.cfg.skip_eval:
             step = 0
@@ -1002,6 +1001,8 @@ class Runner:
         refine_radius        = self.hpara.refine_radius
         refine_threhold      = self.hpara.refine_threhold
         voxel_size           = self.hpara.voxel_size
+        filter_distance      = self.hpara.filter_distance
+        min_group_size       = self.hpara.min_group_size
         
         self.splats = dict(self.splats)
         points_init = self.splats["means"].clone().detach()
@@ -1093,7 +1094,7 @@ class Runner:
                 k=rigidity_k,
                 min_inlier_ratio=min_inlier_ratio,
                 confidence=confidence,
-                min_inlier_size=100,
+                min_group_size=min_group_size,
                 max_expansion_iterations=100,
                 reprojection_error=reprojection_error,
                 iterations_count=100,
@@ -1872,7 +1873,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         if cfg.single_finetune:
 
             if cfg.finetune_with_only_rgb:
-                runner.cfg.max_steps = 3000
+                runner.cfg.max_steps = 500
                 runner.train()
             elif cfg.motion_video:
                 runner.make_motion_video(idx=0, threhold_early_stop=5e-6, scheduler_step=500, min_rigid_coef=0)

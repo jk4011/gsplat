@@ -6,8 +6,11 @@ set -o xtrace # print command
 script_name=$1
 wandb_group_name=$2
 
-bash scripts/${script_name} 0   blue_car        0142     0214   00      ${wandb_group_name} &&
+# script_name=finetuning_drag_diva360.sh
+# wandb_group_name=tmp
+
 bash scripts/${script_name} 0   wall_e          0222     0286   00      ${wandb_group_name} &&
+bash scripts/${script_name} 0   blue_car        0142     0214   00      ${wandb_group_name} &&
 bash scripts/${script_name} 0   k1_hand_stand   0412     0426   01      ${wandb_group_name} &
 
 bash scripts/${script_name} 1   stirling        0000     0045   00      ${wandb_group_name} &&
