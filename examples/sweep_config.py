@@ -15,7 +15,7 @@ sweep_config = {
         "coef_drag_3d"         : {"values": [3000]},
         "lr_q"                 : {"values": [0.01, 0.02, 0.05]},
         "lr_t"                 : {"values": [0.001, 0.002, 0.005, 0.01]},
-        "rigidity_k"           : {"values": [25, 50, 75, 100]},
+        "rigidity_k"           : {"values": [10, 25, 50, 75, 100]},
         "reprojection_error"   : {"values": [5, 6, 7, 8, 10]},
         "anchor_k"             : {"values": [10, 15]},
         "rbf_gamma"            : {"values": [50]},
@@ -51,6 +51,8 @@ best_config_dict = EasyDict({
         "refine_radius": 0.05,
         "refine_threhold": 0.01,
         "voxel_size": 0.02,
+        "filter_distance": 1,
+        "min_group_size": 100,
     },
     "diva360": {
         "anchor_k": 10,
@@ -71,8 +73,10 @@ best_config_dict = EasyDict({
         "refine_threhold": 0.01,
         "reprojection_error": 8,
         "rigidity_k": 25,
-        "vis_threshold": 0.5,
+        "vis_threshold": 0.3,
         "voxel_size": 0.06,
+        "filter_distance": 1,
+        "min_group_size": 25,
     }
 })
 
