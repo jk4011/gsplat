@@ -1,31 +1,31 @@
 import wandb
 from easydict import EasyDict
 
-SWEEP_WHOLE_ID = "jh11/GESI_sweep/93jq309e"
+SWEEP_WHOLE_ID = "jh11/GESI_sweep/ovki01qh"
 
 sweep_config = {
     "method": "bayes",  # grid, random, bayes 중 선택
     "metric": {"name": "psnr_mean", "goal": "maximize"},
     "parameters": {
-        "n_anchor"             : {"values": [300, 500]},
+        "n_anchor"             : {"values": [300]},
         "coef_drag"            : {"values": [0.5, 1]},
-        "coef_arap_drag"       : {"values": [3000, 5000, 10000, 20000]},
+        "coef_arap_drag"       : {"values": [1000, 2000, 5000, 10000]},
         "coef_group_arap"      : {"values": [100, 200, 500, 1000, 2000]},
         "coef_rgb"             : {"values": [2000, 5000, 10000, 20000, 50000]},
         "coef_drag_3d"         : {"values": [3000]},
-        "lr_q"                 : {"values": [0.05]},
-        "lr_t"                 : {"values": [0.01]},
+        "lr_q"                 : {"values": [0.01, 0.02, 0.05]},
+        "lr_t"                 : {"values": [0.001, 0.002, 0.005, 0.01]},
         "rigidity_k"           : {"values": [25, 50, 75, 100]},
-        "reprojection_error"   : {"values": [5, 7, 8, 10]},
+        "reprojection_error"   : {"values": [5, 6, 7, 8, 10]},
         "anchor_k"             : {"values": [10, 15]},
         "rbf_gamma"            : {"values": [50]},
         "cycle_threshold"      : {"values": [10]},
         "vis_threshold"        : {"values": [0.5]},
         "min_inlier_ratio"     : {"values": [0.5, 0.6, 0.7, 0.8]},
-        "confidence"           : {"values": [0.97, 0.98, 0.99]},
+        "confidence"           : {"values": [0.95, 0.97, 0.99]},
         "refine_radius"        : {"values": [0.03, 0.05, 0.07, 0.10]},
         "refine_threhold"      : {"values": [0.002, 0.005, 0.01, 0.02, 0.03, 0.05]},
-        "voxel_size"           : {"values": [0.02, 0.03, 0.04, 0.05, 0.06]},
+        "voxel_size"           : {"values": [0.002, 0.005, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06]},
     },
 }
 
@@ -53,11 +53,11 @@ best_config_dict = EasyDict({
         "voxel_size": 0.02,
     },
     "diva360": {
-        "anchor_k": 15,
-        "coef_arap_drag": 20000,
+        "anchor_k": 10,
+        "coef_arap_drag": 10000,
         "coef_drag": 0.5,
         "coef_drag_3d": 3000,
-        "coef_group_arap": 500,
+        "coef_group_arap": 1000,
         "coef_rgb": 50000,
         "confidence": 0.97,
         "cycle_threshold": 10,
@@ -67,12 +67,12 @@ best_config_dict = EasyDict({
         "n_anchor": 300,
         "min_inlier_ratio": 0.7,
         "rbf_gamma": 50,
-        "reprojection_error": 10,
-        "rigidity_k": 100,
-        "vis_threshold": 0.5,
-        "refine_radius": 0.03,
+        "refine_radius": 0.1,
         "refine_threhold": 0.01,
-        "voxel_size": 0.04,
+        "reprojection_error": 8,
+        "rigidity_k": 25,
+        "vis_threshold": 0.5,
+        "voxel_size": 0.06,
     }
 })
 

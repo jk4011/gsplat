@@ -1621,6 +1621,8 @@ class Runner:
                 colors_p = colors.permute(0, 3, 1, 2)  # [1, 4, H, W]
                 try:
                     _, img1, img2 = crop_two_image_with_alpha(colors_p[0], pixels_p[0])
+                    img1 = img1[:, ::2, ::2]
+                    img2 = img2[:, ::2, ::2]
                 except:
                     continue
                 img_diff_list.append(get_img_diff(img1, img2))
@@ -1652,14 +1654,10 @@ class Runner:
             )
             if wandb.run and not cfg.wandb_sweep:
                 img_diffs = [
-                    wandb.Image(img_diff_list[0], caption="00"),
-                    wandb.Image(img_diff_list[5], caption="05"),
-                    wandb.Image(img_diff_list[10], caption="10"),
+                    wandb.Image(img_diff_list[i], caption="00") for i in range(0, len(img_diff_list), 3)
                 ]
                 white_img_diffs = [
-                    wandb.Image(white_img_diff_list[0], caption="00"),
-                    wandb.Image(white_img_diff_list[5], caption="05"),
-                    wandb.Image(white_img_diff_list[10], caption="10"),
+                    wandb.Image(white_img_diff_list[i], caption="00") for i in range(0, len(img_diff_list), 3)
                 ]
                 logging_data = {
                     "psnr": stats["psnr"],

@@ -59,8 +59,8 @@ class DrotRunner(Runner):
         drot_iterations      = 500
         coef_arap_drag       = self.hpara.coef_arap_drag
         coef_rgb             = self.hpara.coef_rgb
-        lr_q                 = self.hpara.lr_q
-        lr_t                 = self.hpara.lr_t
+        lr_q                 = self.hpara.lr_q * 0.1
+        lr_t                 = self.hpara.lr_t * 0.1
         coef_drag            = 1
         coef_arap_drag       = 1e4
         coef_mask            = 10
@@ -179,6 +179,7 @@ class DrotRunner(Runner):
                 loss_mask_arap = (torch.sigmoid(mask_arap) - 1).abs().mean()
                 loss_mask_rot = (torch.sigmoid(mask_rot) - 1).abs().mean()
                 loss_mask_dist = (torch.sigmoid(mask_dist) - 1).abs().mean()
+                loss_mask = loss_mask_arap + loss_mask_rot + loss_mask_dist
 
                 loss = (
                     # Eq.18 in "3D Gaussian Editing with A Single Image"
@@ -187,7 +188,7 @@ class DrotRunner(Runner):
                     # Eq.19 in "3D Gaussian Editing with A Single Image"
                     loss_rot * coef_arap_rot +
                     loss_dist * coef_arap_dist +
-                    (loss_mask_rot + loss_mask_dist + loss_mask_arap) * coef_mask
+                    loss_mask * coef_mask
                 )
 
                 if stage == "fine":
@@ -201,7 +202,7 @@ class DrotRunner(Runner):
                 anchor_optimizer.step()
                 anchor_optimizer.zero_grad()
 
-                wandb.log({"loss_arap": loss_arap, "loss_drag": loss_drot}, step=cur_step)
+                wandb.log({"loss_arap": loss_arap, "loss_drag": loss_drot, "loss_rgb": loss_rgb}, step=cur_step)
             
                 if cur_step % 100 == 0:
                     image_source, image_target = self.fetch_comparable_two_image(
