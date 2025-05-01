@@ -1042,13 +1042,13 @@ class Runner:
         # exit()
 
         vis_mask = self.get_visibility_mask()
-        points_mask, drag_mask = get_drag_mask(
+        points_mask, drag_indice = get_drag_mask(
             points_2d, vis_mask, drag_source, filter_distance
         )
 
         points_3d_filtered = points_3d[points_mask]
-        drag_target_filtered = drag_target[drag_mask]
-        drag_source_filtered = drag_source[drag_mask]
+        drag_target_filtered = drag_target[drag_indice]
+        drag_source_filtered = drag_source[drag_indice]
 
         ##########################################################
         ########### 3. initialize anchor and optimizer ###########
@@ -1226,7 +1226,6 @@ class Runner:
                             wandb.Image(diff_img_white, caption="train_diff_white"),
                         ]}, step=i,
                     )
-                
 
         if not self.cfg.skip_eval:
             self.eval(step=drag_iterations+1)
@@ -1257,7 +1256,7 @@ class Runner:
             "camtoworlds" : camtoworlds,
             "anchor" : anchor,
             "points_mask" : points_mask,
-            "drag_mask" : drag_mask,
+            "drag_mask" : drag_indice,
             "drag_target" : drag_target,
             "drag_source" : drag_source,
             "image_target" : image_target,
@@ -1711,7 +1710,7 @@ class Runner:
         
 
     @torch.no_grad()
-    def render_traj(self, step, group_id_all=None, with_depth=False, video_path="/data2/wlsgur4011/GESI/output_video_traj/output.mp4"):
+    def render_traj(self, step, group_id_all=None, video_path="/data2/wlsgur4011/GESI/output_video_traj/output.mp4"):
         """Entry for trajectory rendering."""
         print("Running trajectory rendering...")
         cfg = self.cfg
@@ -1720,10 +1719,10 @@ class Runner:
         if group_id_all is not None:
             self.update_sh_with_group_id(group_id_all)
 
-        camtoworlds_all = self.parser.camtoworlds[5:-5]
+        camtoworlds_all = self.parser.camtoworlds
         if cfg.render_traj_path == "interp":
             camtoworlds_all = generate_interpolated_path(
-                camtoworlds_all, 20
+                camtoworlds_all, 4
             )  # [N, 3, 4]
         elif cfg.render_traj_path == "ellipse":
             height = camtoworlds_all[:, 2, 3].mean()
@@ -1789,16 +1788,11 @@ class Runner:
                 render_mode="RGB+ED",
             )  # [1, H, W, 4]
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
+            H, W = colors.shape[1:3]
+            colors = colors[:, :, W//4:3*W//4]  # crop by width
 
-            if with_depth:
-                depths = renders[..., 3:4]  # [1, H, W, 1]
-                depths = (depths - depths.min()) / (depths.max() - depths.min())
-                canvas_list = [colors, depths.repeat(1, 1, 1, 3)]
-                canvas = torch.cat(canvas_list, dim=2).squeeze(0).cpu().numpy()
-                canvas = (canvas * 255).astype(np.uint8)
-            else:
-                canvas = colors.squeeze(0).cpu().numpy()
-                canvas = (canvas * 255).astype(np.uint8)
+            canvas = colors.squeeze(0).cpu().numpy()
+            canvas = (canvas * 255).astype(np.uint8)
 
             writer.append_data(canvas)
         writer.close()
@@ -1886,12 +1880,13 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         if cfg.render_traj_all:
             if cfg.data_name == "diva360":
                 traj_path_list = ["diva360_spiral"]  # "interp", "ellipse", "spiral"
-            elif cfg.data_name == "dfa":
-                traj_path_list = ["interp", "ellipse", "spiral"]
+            elif cfg.data_name == "DFA":
+                traj_path_list = ["interp"] # "interp", "ellipse", "spiral"
             for render_traj_path in traj_path_list:
                 runner.cfg.render_traj_path = render_traj_path
 
-                video_dir = "/data2/wlsgur4011/GESI/output_video_traj"
+                video_dir = f"/data2/wlsgur4011/GESI/output_video_traj/{cfg.data_name}"
+                os.makedirs(video_dir, exist_ok=True)
                 video_paths = [
                     f"{video_dir}/traj_{cfg.object_name}_{cfg.render_traj_path}.mp4",
                     f"{video_dir}/traj_{cfg.object_name}_{cfg.render_traj_path}_init.mp4",
@@ -1907,6 +1902,13 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
                     video_path = video_paths[i]
                     runner.render_traj(step=step, group_id_all=group_id_all, video_path=video_path)
                     runner.cfg.sh_degree = 0
+            
+                # concat three video by width 
+                video_path = f"{video_dir}/traj_{cfg.object_name}_{cfg.render_traj_path}_concat.mp4"
+                os.system(f'ffmpeg -y -i "{video_paths[0]}" -i "{video_paths[1]}" -i "{video_paths[2]}" -filter_complex hstack=inputs=3 "{video_path}"')
+                
+                for video_path in video_paths:
+                    os.remove(video_path)
 
     else:
         runner.train()

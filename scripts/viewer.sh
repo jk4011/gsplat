@@ -4,7 +4,7 @@ set -e        # exit when error
 set -o xtrace # print command
 
 CUDA_VISIBLE_DEVICES=1 python examples/simple_viewer.py \
-    --ckpt=/data2/wlsgur4011/GESI/gsplat/results/diva360/dog_0177/ckpts/ckpt_best_psnr.pt \
+    --ckpt=/data2/wlsgur4011/GESI/LGM/workspace_test/anya_rgba.pt \
     --port 8082
 
 # /data2/wlsgur4011/GESI/gsplat/results/dfa/beagle_dog_s1_24fps_100/ckpts/ckpt_best_psnr.pt

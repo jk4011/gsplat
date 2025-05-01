@@ -68,7 +68,7 @@ class DrotRunner(Runner):
         coef_arap_dist       = 1e5
         coef_fine_reg        = 1e4
         min_thresh           = 0.1
-        deform_only          = True
+        deform_only          = False
         if deform_only:
             lr_rest = 0
         else:
