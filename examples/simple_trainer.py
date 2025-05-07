@@ -1008,16 +1008,23 @@ class Runner:
         self.splats = dict(self.splats)
         points_init = self.splats["means"].clone().detach()
         quats_init = self.splats["quats"].clone().detach()
+
+
         
         ##########################################################
-        ################## 1. get drag via RoMa ##################
+        ############ 1. get campose and drag via RoMa ############
         ##########################################################
 
-        from jhutil import color_log; color_log(1111, "get drag via RoMa")
+        from jhutil import color_log; color_log(1111, "get campose and drag via RoMa")
         with torch.no_grad():
+
+            self.image_target = self.fetch_target_image(return_rgba=True)
+            self.camtoworlds_pred = self.estimate_camtoworlds(self.image_target)
+
             image_source, image_target = self.fetch_comparable_two_image(
                 return_rgba=True
             )
+
             drag_source, drag_target, bbox = get_drag_roma(
                 image_source, image_target, device=self.device, cycle_threshold=cycle_threshold
             )
@@ -1141,8 +1148,6 @@ class Runner:
             ]
             wandb.log({"matching": images})
         
-        self.camtoworlds_estim = self.estimate_camtoworlds(image_target)
-        exit()
 
         ##########################################################
         #################### 5. drag optimize ####################
@@ -1228,7 +1233,7 @@ class Runner:
                     )
 
         if not self.cfg.skip_eval:
-            self.eval(step=drag_iterations+1)
+            self.eval(step=drag_iterations+1, is_pred_camtoworld=True)
 
         # data for motion
         motion_data = [points_init.detach(), quats_init.detach(), anchor.detach(), R.detach(), t.detach(), group_id_all, bbox]
@@ -1404,9 +1409,9 @@ class Runner:
             self.data = next(trainloader_iter)
         data = self.data
         device = self.device
-        camtoworlds = data["camtoworld"].to(device)  # [1, 4, 4]
+        # camtoworlds = data["camtoworld"].to(device)  # [1, 4, 4]
         Ks = data["K"].to(device)  # [1, 3, 3]
-        means2d, depth = project_pointcloud_to_2d(points, camtoworlds, Ks)
+        means2d, depth = project_pointcloud_to_2d(points, self.camtoworlds_pred, Ks)
         return means2d, depth
 
     def fectch_query_image(self):
@@ -1423,40 +1428,6 @@ class Runner:
         
         return gt_images
     
-    
-    def fetch_target_data(self):
-        valloader = DataLoader(self.valset, batch_size=1)
-        
-        render_img_list = []
-        camtoworld_list = []
-        
-        for data in valloader:
-            device = self.device
-            gt_images = data["image"].to(device) / 255.0  # [1, H, W, 3]
-            camtoworlds = data["camtoworld"].to(device)  # [1, 4, 4]
-            Ks = data["K"].to(device)  # [1, 3, 3]
-            image_ids = data["image_id"].to(device)
-            masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
-            height, width = gt_images.shape[1:3]
-
-            renders, alphas, info = self.rasterize_splats(
-                camtoworlds=camtoworlds,
-                Ks=Ks,
-                width=width,
-                height=height,
-                sh_degree=3,
-                near_plane=cfg.near_plane,
-                far_plane=cfg.far_plane,
-                image_ids=image_ids,
-                masks=masks,
-            )
-            render_img = torch.concat([renders, alphas], dim=-1)
-            render_img_list.append(render_img)
-            camtoworld_list.append(camtoworlds)
-        
-        return render_img_list, camtoworld_list
-
-
     def estimate_camtoworlds(self, image_target):
         trainset = Dataset(
             self.parser,
@@ -1493,46 +1464,44 @@ class Runner:
             img1 = rearrange(image_source[0], "h w c -> c h w")
             img2 = rearrange(image_target[0], "h w c -> c h w")
 
-            assert img1.shape == img2.shape
-            drag_from, drag_to, certainty, bbox = get_drag_roma(img1, img2, cycle_threshold=self.hpara.cycle_threshold, device=device)
-            n_covered_patch = count_covered_patches(drag_to, patch_size=16)
+            assert img1.shape == img2.shape, f"img1: {img1.shape}, img2: {img2.shape}"
+            drag_from, drag_to, bbox = get_drag_roma(img1, img2, cycle_threshold=self.hpara.cycle_threshold, device=device)
+            n_covered_patch = count_covered_patches(drag_to, patch_size=20)
             if n_covered_patch > max_covered_path:
                 max_covered_path = n_covered_patch
-                best_camtoworld = camtoworlds
-                best_image_ids = data["image_id"].to(device)
-                best_image_source = img1
-        
-        drag_from, drag_to, certainty, bbox = get_drag_roma(best_image_source, img2, cycle_threshold=self.hpara.cycle_threshold, device=device)
-        matching_image = show_matching(
-            best_image_source[:3],
-            img2[:3],
-            drag_from,
-            drag_to,
-            bbox=bbox,
-            skip_line=True,
-        )
-        wandb.log({
-            "best_cam_img": best_image_ids,
-            "best_image_from": wandb.Image(best_image_source),
-            "best_matching_image": wandb.Image(matching_image),
-        })
+                camtoworld_pred = camtoworlds
 
-        best_camtoworld
+        return camtoworld_pred
 
-        return best_camtoworld
 
-    
-    def fetch_comparable_two_image(self, return_rgba=False, return_shape="bhwc"):
-
+    def fetch_target_image(self, return_rgba=False, return_shape="bhwc"):
         if not hasattr(self, "data"):
             trainloader = DataLoader(self.trainset, batch_size=1)
             trainloader_iter = iter(trainloader)
             self.data = next(trainloader_iter)
         data = self.data
         device = self.device
-        # camtoworlds = data["camtoworld"].to(device)  # [1, 4, 4]
-        camtoworlds = self.camtoworlds_estim
-        
+
+        target_images = data["image"].to(device) / 255.0  # [1, H, W, 3]
+        target_alphas = data["alpha"].to(device) / 255.0  # [1, H, W, 1]
+
+        if return_rgba:
+            target_images = torch.concat([target_images, target_alphas], dim=-1)
+        if return_shape == "bhwc":
+            pass
+        elif return_shape == "chw":
+            target_images = target_images[0].permute(2, 0, 1)
+        else:
+            raise ValueError(f"Invalid shape: {return_shape}")
+
+        return target_images
+
+
+    
+    def fetch_comparable_two_image(self, return_rgba=False, return_shape="bhwc"):
+
+        data = self.data
+        device = self.device
 
         Ks = data["K"].to(device)  # [1, 3, 3]
         gt_images = data["image"].to(device) / 255.0  # [1, H, W, 3]
@@ -1542,7 +1511,7 @@ class Runner:
         height, width = gt_images.shape[1:3]
 
         renders, alphas, info = self.rasterize_splats(
-            camtoworlds=camtoworlds,
+            camtoworlds=self.camtoworlds_pred,
             Ks=Ks,
             width=width,
             height=height,
@@ -1579,7 +1548,7 @@ class Runner:
         return rgb_loss
 
     @torch.no_grad()
-    def eval(self, step: int, stage: str = "val"):
+    def eval(self, step: int, stage: str = "val", is_pred_camtoworld=False):
         """Entry for evaluation."""
         print("Running evaluation...")
         cfg = self.cfg
@@ -1606,6 +1575,11 @@ class Runner:
 
             torch.cuda.synchronize()
             tic = time.time()
+            if is_pred_camtoworld:
+                camtoworlds_origin = self.data["camtoworld"].to(device)
+                camtoworlds_residual = self.camtoworlds_pred @ camtoworlds_origin.inverse()
+                camtoworlds = camtoworlds_residual @ camtoworlds
+
             colors, alpha, _ = self.rasterize_splats(
                 camtoworlds=camtoworlds,
                 Ks=Ks,
