@@ -1,4 +1,7 @@
 #!/bin/bash
+
+# bash scripts/run_all.sh finetuning_drag_diva360.sh tmp
+
 SECONDS=0
 set -e        # exit when error
 set -o xtrace # print command

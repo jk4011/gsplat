@@ -71,6 +71,7 @@ from gesi.helper import (
     deform_point_cloud_arap_2d,
     knn_djastra,
     get_drag_mask,
+    count_covered_patches,
 )
 from gesi.visibility import compute_visibility
 from gesi.mini_pytorch3d import quaternion_multiply, quaternion_invert
@@ -1011,9 +1012,6 @@ class Runner:
         ##########################################################
         ################## 1. get drag via RoMa ##################
         ##########################################################
-        
-        # with torch.no_grad():
-        #     image_source, image_target = self.fetch_with_orientation()
 
         from jhutil import color_log; color_log(1111, "get drag via RoMa")
         with torch.no_grad():
@@ -1056,7 +1054,6 @@ class Runner:
         from jhutil import color_log; color_log(3333, "initialize anchor and optimizer")
 
         anchor = voxelize_pointcloud_and_get_means(points_3d, voxel_size=voxel_size)
-        # anchor, anchor_indice = torch_fpsample.sample(points_3d.cpu(), n_anchor)
         anchor = anchor.to(self.device)
 
 
@@ -1143,6 +1140,9 @@ class Runner:
                 wandb.Image(group_image, caption="group_image"),
             ]
             wandb.log({"matching": images})
+        
+        self.camtoworlds_estim = self.estimate_camtoworlds(image_target)
+        exit()
 
         ##########################################################
         #################### 5. drag optimize ####################
@@ -1456,55 +1456,70 @@ class Runner:
         
         return render_img_list, camtoworld_list
 
-    
-    def fetch_with_orientation(self):
-        query_img = self.fectch_query_image()
-        render_img_list, camtoworld_list = self.fetch_target_data()
-        
-        n_drag_max = 0
-        for i, render_img in enumerate(render_img_list):
-            
-            drag_render, drag_query, bbox = get_drag_roma(
-                render_img, query_img, device=self.device
+
+    def estimate_camtoworlds(self, image_target):
+        trainset = Dataset(
+            self.parser,
+            split="train",
+            patch_size=self.cfg.patch_size,
+            load_depths=self.cfg.depth_loss,
+            single_finetune=False,
+            cam_idx=self.cfg.cam_idx,
+        )
+        trainloader = DataLoader(trainset, batch_size=1)
+        device = self.device
+
+        max_covered_path = -1
+        for data in trainloader:
+            Ks = data["K"].to(device)  # [1, 3, 3]
+            image_ids = data["image_id"].to(device)
+            gt_images = data["image"].to(device) / 255.0  # [1, H, W, 3]
+            height, width = gt_images.shape[1:3]
+            camtoworlds = data["camtoworld"].to(device)  # [1, 4, 4]
+
+            renders, alphas, info = self.rasterize_splats(
+                camtoworlds=camtoworlds,
+                Ks=Ks,
+                width=width,
+                height=height,
+                sh_degree=3,
+                near_plane=self.cfg.near_plane,
+                far_plane=self.cfg.far_plane,
+                image_ids=image_ids,
+                render_mode="RGB",
             )
-            n_drag = len(drag_render)
-            if n_drag > n_drag_max:
-                n_drag_max = n_drag
-                target_idx = i
+            image_source = torch.concat([renders, alphas], dim=-1)
             
-            if True:
-                img1 = rearrange(render_img[0], "h w c -> c h w")
-                img2 = rearrange(query_img[0], "h w c -> c h w")
-                
-                n_pts = n_drag
-                if n_pts == 0:
-                    drag_render = torch.empty(0, 2)
-                    drag_query = torch.empty(0, 2)
-                else:
-                    drag_render = drag_render[:: n_drag // n_pts]
-                    drag_query = drag_query[:: n_drag // n_pts]
-                origin_image = show_matching(img1[:3], img2[:3], bbox=bbox, skip_line=True)
-                matching_image = show_matching(
-                    img1[:3],
-                    img2[:3],
-                    drag_render,
-                    drag_query,
-                    bbox=bbox,
-                    skip_line=True,
-                )
-                
-                images = [
-                    wandb.Image(origin_image, caption="origin_image"),
-                    wandb.Image(matching_image, caption="matching_image"),
-                ]
-                wandb.log({f"matching_{i}": images})
+            img1 = rearrange(image_source[0], "h w c -> c h w")
+            img2 = rearrange(image_target[0], "h w c -> c h w")
 
-        wandb.log({"target_idx": target_idx})
-            
-        target_img = render_img_list[target_idx]
-        self.target_campose = camtoworld_list[target_idx]
+            assert img1.shape == img2.shape
+            drag_from, drag_to, certainty, bbox = get_drag_roma(img1, img2, cycle_threshold=self.hpara.cycle_threshold, device=device)
+            n_covered_patch = count_covered_patches(drag_to, patch_size=16)
+            if n_covered_patch > max_covered_path:
+                max_covered_path = n_covered_patch
+                best_camtoworld = camtoworlds
+                best_image_ids = data["image_id"].to(device)
+                best_image_source = img1
+        
+        drag_from, drag_to, certainty, bbox = get_drag_roma(best_image_source, img2, cycle_threshold=self.hpara.cycle_threshold, device=device)
+        matching_image = show_matching(
+            best_image_source[:3],
+            img2[:3],
+            drag_from,
+            drag_to,
+            bbox=bbox,
+            skip_line=True,
+        )
+        wandb.log({
+            "best_cam_img": best_image_ids,
+            "best_image_from": wandb.Image(best_image_source),
+            "best_matching_image": wandb.Image(matching_image),
+        })
 
-        return query_img, target_img
+        best_camtoworld
+
+        return best_camtoworld
 
     
     def fetch_comparable_two_image(self, return_rgba=False, return_shape="bhwc"):
@@ -1515,15 +1530,16 @@ class Runner:
             self.data = next(trainloader_iter)
         data = self.data
         device = self.device
-        camtoworlds = data["camtoworld"].to(device)  # [1, 4, 4]
+        # camtoworlds = data["camtoworld"].to(device)  # [1, 4, 4]
+        camtoworlds = self.camtoworlds_estim
+        
+
         Ks = data["K"].to(device)  # [1, 3, 3]
         gt_images = data["image"].to(device) / 255.0  # [1, H, W, 3]
         gt_alphas = data["alpha"].to(device) / 255.0  # [1, H, W, 1]
         image_ids = data["image_id"].to(device)
         masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
         height, width = gt_images.shape[1:3]
-
-        # TODO: render splats in all training images
 
         renders, alphas, info = self.rasterize_splats(
             camtoworlds=camtoworlds,
@@ -1537,7 +1553,6 @@ class Runner:
             render_mode="RGB+ED" if self.cfg.depth_loss else "RGB",
             masks=masks,
         )
-        # TODO: get max matching images
 
         if return_rgba:
             renders = torch.concat([renders, alphas], dim=-1)
