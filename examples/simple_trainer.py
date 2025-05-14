@@ -80,6 +80,7 @@ from jhutil import (
     get_img_diff,
     crop_two_image_with_background,
     crop_two_image_with_alpha,
+    save_motion_img,
 )
 from gesi.roma import get_drag_roma
 import warnings
@@ -219,7 +220,7 @@ class Config:
     # Save training images to tensorboard
     tb_save_image: bool = False
 
-    lpips_net: Literal["vgg", "alex"] = "alex"
+    lpips_net: Literal["vgg", "alex"] = "vgg"
 
     data_name: str = "diva360"
 
@@ -966,13 +967,11 @@ class Runner:
                     _, img1, img2 = crop_two_image_with_alpha(
                         image_source, image_target
                     )
-                    diff_img = get_img_diff(img1[:3], img2[:3])
-                    diff_img_white = get_img_diff(bkgd2white(img1), bkgd2white(img2))
+                    diff_img = get_img_diff(img1, img2)
                     
                     wandb.log(
                         {"train_diff": [
                             wandb.Image(diff_img, caption="train_diff"),
-                            wandb.Image(diff_img_white, caption="train_diff_white")
                         ]}, step=step,
                     )
 
@@ -1115,7 +1114,6 @@ class Runner:
         )
         group_id_all[points_mask] = groud_id
         group_id_all_init = group_id_all.clone().detach()
-
         if wandb.run and not cfg.wandb_sweep:
             n_drag = len(drag_source)
             n_pts = 5000
@@ -1123,30 +1121,30 @@ class Runner:
             img1 = rearrange(image_source[0], "h w c -> c h w")
             img2 = rearrange(image_target[0], "h w c -> c h w")
             
-            origin_image = show_matching(img1[:3], img2[:3], bbox=bbox, skip_line=True)
+            origin_image = show_matching(img1, img2, bbox=bbox, skip_line=True)
             matching_image = show_matching(
-                img1[:3],
-                img2[:3],
+                img1,
+                img2,
                 drag_source[:: n_drag // n_pts],
                 drag_target[:: n_drag // n_pts],
                 bbox=bbox,
                 skip_line=True,
             )
-            group_image = show_groups(
-                img1[:3],
-                img2[:3],
-                drag_source_filtered,
-                drag_target_filtered,
-                groups=groups,
-                bbox=bbox,
-            )
+
+            sh0_origin = self.update_sh_with_group_id(group_id_all)
+            with torch.no_grad():
+                group_image, _ = self.fetch_comparable_two_image(return_rgba=True)
+
+            group_image = rearrange(group_image[0], "h w c -> c h w")
+            group_image = show_matching(img1, group_image, bbox=bbox, skip_line=True)
+            self.splats["sh0"] = sh0_origin
             
             images = [
                 wandb.Image(origin_image, caption="origin_image"),
                 wandb.Image(matching_image, caption="matching_image"),
-                wandb.Image(group_image, caption="group_image"),
             ]
             wandb.log({"matching": images})
+            wandb.log({"group_image": [wandb.Image(group_image, caption="initial_group")]})
         
 
         ##########################################################
@@ -1219,24 +1217,31 @@ class Runner:
                     _, img1, img2 = crop_two_image_with_alpha(
                         image_source, image_target
                     )
-                    diff_img = get_img_diff(img1[:3], img2[:3])
-
-                    img1_white = (img1[:3] + (1 - img1[3])[None, :])
-                    img2_white = (img2[:3] + (1 - img2[3])[None, :])
-                    diff_img_white = get_img_diff(img1_white[:3], img2_white[:3])
+                    diff_img = get_img_diff(img1, img2)
                     
                     wandb.log(
                         {"train_diff": [
                             wandb.Image(diff_img, caption="train_diff"),
-                            wandb.Image(diff_img_white, caption="train_diff_white"),
                         ]}, step=i,
                     )
 
         if not self.cfg.skip_eval:
             self.eval(step=drag_iterations+1, is_pred_camtoworld=True)
 
+
+        sh0_origin = self.update_sh_with_group_id(group_id_all)
+        with torch.no_grad():
+            group_image, image_target = self.fetch_comparable_two_image(return_rgba=True)
+
+        im1 = rearrange(image_target[0], "h w c -> c h w")
+        im2 = rearrange(group_image[0], "h w c -> c h w")
+        image_final_group = show_matching(im1, im2, bbox=bbox, skip_line=True)
+        wandb.log({"group_image": [wandb.Image(image_final_group, caption="final_group")]})
+
+        self.splats["sh0"] = sh0_origin
+
         # data for motion
-        motion_data = [points_init.detach(), quats_init.detach(), anchor.detach(), R.detach(), t.detach(), group_id_all, bbox]
+        motion_data = [points_init.detach(), quats_init.detach(), anchor.detach(), R.detach(), t.detach(), group_id_all, bbox, self.camtoworlds_pred]
         torch.save(motion_data, f"{self.cfg.result_dir}/motion_data.pt")
 
         # save checkpoint
@@ -1291,13 +1296,15 @@ class Runner:
     def make_motion_video(self, idx=0, n_iter=1000, threhold_early_stop=1e-5 , scheduler_step=300, min_rigid_coef=0):
 
         motion_data = torch.load(f"{self.cfg.result_dir}/motion_data.pt")
-        points_init, quats_init, anchor, R_goal, t_goal, group_id_all, bbox = motion_data
+
+        # TODO: class 자체를 Load하기
+        points_init, quats_init, anchor, R_goal, t_goal, group_id_all, bbox, self.camtoworlds_pred = motion_data
         self.splats["means"].data.copy_(points_init.detach())
         self.splats["quats"].data.copy_(quats_init.detach())
         
         # get haraparameter
         coef_drag            = self.hpara.coef_drag_3d
-        coef_group_arap      = self.hpara.coef_group_arap * 0.
+        coef_group_arap      = self.hpara.coef_group_arap * 0.01
         coef_arap_drag       = self.hpara.coef_arap_drag * 0.2
         lr                   = self.hpara.lr_motion
         anchor_k             = self.hpara.anchor_k
@@ -1339,6 +1346,7 @@ class Runner:
         loss_fn = SmoothL1Loss(beta=0.1)
         
         # change into until convergence
+        image_list = []
         for i in tqdm(range(n_iter)):
             R = quaternion_to_matrix(F.normalize(q, dim=-1)).squeeze()  # (N, 3, 3)
             anchor_translated = anchor + t  # (N, 3)
@@ -1370,16 +1378,13 @@ class Runner:
             anchor_optimizer.step()
             scheduler.step()
             anchor_optimizer.zero_grad()
-    
+
             with torch.no_grad():
-                image_source, image_target = self.fetch_comparable_two_image()
+                image_source, image_target = self.fetch_comparable_two_image(return_rgba=True)
             
-            if i == 0:
-                image_list = []
-                
             if self.cfg.simple_video:
-                image = image_source.squeeze()
-                stride = max(len(image_list), 75) // 75
+                w_from, h_from, w_to, h_to = bbox
+                image = image_source[:, h_from-5:h_to+5, w_from-10:w_to].squeeze()
             else:
                 # crop
                 w_from, h_from, w_to, h_to = bbox
@@ -1389,15 +1394,33 @@ class Runner:
                 image = torch.cat(
                     [image_source.squeeze(), image_target.squeeze()], dim=1
                 )
-                # rewind
-                image_list = image_list + [image_list[-1]] * 30 + image_list[::-1]
-                stride = max(len(image_list), 150) // 150
             image_list.append(image.cpu())
 
+
+        stride = max(len(image_list), 75) // 75
         if self.cfg.simple_video:
             output_path = f"/data2/wlsgur4011/GESI/output_video/{self.cfg.data_name}_simple/{self.cfg.video_name}_{idx}.mp4"
+            
+            image_list = torch.stack(image_list, dim=0)
+            
+            image_list_path = f"/data2/wlsgur4011/GESI/output_overlay_img/{self.cfg.data_name}/{self.cfg.video_name}.pt"
+            torch.save(image_list, image_list_path)
+
+            img_path = f"/data2/wlsgur4011/GESI/output_overlay_img/{self.cfg.data_name}/{self.cfg.video_name}.png"
+            os.makedirs(os.path.dirname(img_path), exist_ok=True)
+
+            indice = [0, int(len(image_list) * 0.2), int(len(image_list) * 0.35), -1]
+            save_motion_img(image_list[indice], img_path)
+
+            img_path = f"/data2/wlsgur4011/GESI/output_overlay_img/{self.cfg.data_name}/{self.cfg.video_name}_low_alpha.png"
+            indice = [0, int(len(image_list) * 0.2), -1]
+            save_motion_img(image_list[indice], img_path, alpha_range=(0.2, 1))
+
+
         else:
             output_path = f"/data2/wlsgur4011/GESI/output_video/{self.cfg.data_name}/{self.cfg.video_name}_{idx}.mp4"
+            # rewind
+            image_list = image_list + [image_list[-1]] * 30 + image_list[::-1]
         
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         save_video(image_list[::stride], output_path, fps=30)
@@ -1499,6 +1522,10 @@ class Runner:
 
     
     def fetch_comparable_two_image(self, return_rgba=False, return_shape="bhwc"):
+        if not hasattr(self, "data"):
+            trainloader = DataLoader(self.trainset, batch_size=1)
+            trainloader_iter = iter(trainloader)
+            self.data = next(trainloader_iter)
 
         data = self.data
         device = self.device
@@ -1562,7 +1589,6 @@ class Runner:
         ellipse_time = 0
         metrics = defaultdict(list)
         img_diff_list = []
-        white_img_diff_list = []
         for i, data in enumerate(valloader):
             camtoworlds = data["camtoworld"].to(device)
             Ks = data["K"].to(device)
@@ -1615,7 +1641,6 @@ class Runner:
                 except:
                     continue
                 img_diff_list.append(get_img_diff(img1, img2))
-                white_img_diff_list.append(get_img_diff(bkgd2white(img1), bkgd2white(img2)))
                 colors_p = colors_p[:, :3]
                 pixels_p = pixels_p[:, :3]
                 metrics["psnr"].append(self.psnr(colors_p, pixels_p))
@@ -1645,15 +1670,11 @@ class Runner:
                 img_diffs = [
                     wandb.Image(img_diff_list[i], caption="00") for i in range(0, len(img_diff_list), 3)
                 ]
-                white_img_diffs = [
-                    wandb.Image(white_img_diff_list[i], caption="00") for i in range(0, len(img_diff_list), 3)
-                ]
                 logging_data = {
                     "psnr": stats["psnr"],
                     "ssim": stats["ssim"],
                     "lpips": stats["lpips"],
                     "img_diff": img_diffs,
-                    "white_img_diffs": white_img_diffs,
                 }
                 wandb.log(logging_data, step=step)
                 
@@ -1695,8 +1716,11 @@ class Runner:
             rgb = rgb.unsqueeze(0).repeat(group_id.sum(), 1)
             sh0[group_id] = rgb_to_sh(rgb)
 
+        sh0_origin = self.splats["sh0"].clone().detach()
         self.splats["sh0"] = sh0
-        
+
+        return sh0_origin
+    
 
     @torch.no_grad()
     def render_traj(self, step, group_id_all=None, video_path="/data2/wlsgur4011/GESI/output_video_traj/output.mp4"):
@@ -1706,7 +1730,7 @@ class Runner:
         device = self.device
 
         if group_id_all is not None:
-            self.update_sh_with_group_id(group_id_all)
+            sh0_origin = self.update_sh_with_group_id(group_id_all)
 
         camtoworlds_all = self.parser.camtoworlds
         if cfg.render_traj_path == "interp":
@@ -1789,6 +1813,9 @@ class Runner:
         video_dir = os.path.abspath(video_dir)
         print(f"Video saved to {video_path}")
 
+        if group_id_all is not None:
+            self.splats["sh0"] = sh0_origin
+
     @torch.no_grad()
     def run_compression(self, step: int):
         """Entry for running compression."""
@@ -1860,8 +1887,8 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
                 runner.train()
             elif cfg.motion_video:
                 runner.make_motion_video(idx=0, threhold_early_stop=5e-6, scheduler_step=500, min_rigid_coef=0)
-                runner.make_motion_video(idx=1, threhold_early_stop=1e-5, scheduler_step=800, min_rigid_coef=0)
-                runner.make_motion_video(idx=2, threhold_early_stop=1e-5, scheduler_step=500, min_rigid_coef=0)
+                # runner.make_motion_video(idx=1, threhold_early_stop=1e-5, scheduler_step=800, min_rigid_coef=0)
+                # runner.make_motion_video(idx=2, threhold_early_stop=1e-5, scheduler_step=500, min_rigid_coef=0)
             else:
                 runner.train_drag()
         

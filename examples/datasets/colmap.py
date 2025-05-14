@@ -336,6 +336,8 @@ class Dataset:
         indices = np.arange(len(self.parser.image_names))
         
         if single_finetune:
+            # current indices is determined by indexing, not image name. 
+            # TODO: choose indices using image_names.
             if split == "train":
                 self.indices = indices[indices == cam_idx]
             else:

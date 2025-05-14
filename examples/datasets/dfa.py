@@ -26,7 +26,7 @@ def dfa_to_colmap(c2w):
 
 
 class SceneManagerDFA:
-    def __init__(self, data_dir="/data2/wlsgur4011/GESI/gsplat/data/DFA_procesed/beagle_dog/0"):
+    def __init__(self, data_dir="/data2/wlsgur4011/GESI/gsplat/data/DFA_processed/beagle_dog(s1)/0"):
         self.data_dir = data_dir
         self.cameras = OrderedDict()
         self.images = OrderedDict()

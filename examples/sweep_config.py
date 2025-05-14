@@ -25,7 +25,7 @@ sweep_config = {
         "confidence"           : {"values": [0.95, 0.97, 0.99]},
         "refine_radius"        : {"values": [0.03, 0.05, 0.07, 0.10]},
         "refine_threhold"      : {"values": [0.002, 0.005, 0.01, 0.02, 0.03, 0.05]},
-        "voxel_size"           : {"values": [0.002, 0.005, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06]},
+        "voxel_size"           : {"values": [0.02, 0.03, 0.04, 0.05, 0.06]},
     },
 }
 

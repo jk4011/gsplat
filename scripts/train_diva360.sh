@@ -1,3 +1,5 @@
+# bash scripts/train_diva360.sh 0 penguin 0239
+# bash scripts/train_diva360.sh 0 wall_e 0222
 #!/bin/bash
 SECONDS=0
 set -e        # exit when error
@@ -15,11 +17,11 @@ fi
 
 CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
     --data_dir $data_dir \
-    --result_dir ./results/diva360/${object_name}_${frame_index} \
+    --result_dir ./results/diva360/tmp \
     --data_factor 1 \
     --data_name diva360 \
     --port 8081 \
     --scale_reg 0.1 \
-    --disable_viewer \
-    --random_bkgd \
+    # --random_bkgd \
+    # --disable_viewer \
     

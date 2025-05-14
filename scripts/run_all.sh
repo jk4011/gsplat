@@ -9,7 +9,9 @@ set -o xtrace # print command
 script_name=$1
 wandb_group_name=$2
 
+# script_name=make_motion_diva360.sh
 # script_name=finetuning_drag_diva360.sh
+
 # wandb_group_name=tmp
 
 bash scripts/${script_name} 0   wall_e          0222     0286   00      ${wandb_group_name} &&
