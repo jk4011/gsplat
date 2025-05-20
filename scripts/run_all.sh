@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# bash scripts/run_all.sh finetuning_drag_diva360.sh tmp
-
+# bash scripts/run_all.sh make_motion_diva360.sh tmp
+# bash scripts/run_all.sh trajectory_video_diva.sh
 SECONDS=0
 set -e        # exit when error
 set -o xtrace # print command
@@ -9,8 +9,8 @@ set -o xtrace # print command
 script_name=$1
 wandb_group_name=$2
 
-# script_name=make_motion_diva360.sh
 # script_name=finetuning_drag_diva360.sh
+# script_name=make_motion_diva360.sh
 
 # wandb_group_name=tmp
 
@@ -35,9 +35,9 @@ bash scripts/${script_name} 4   clock           0000     1500   00      ${wandb_
 bash scripts/${script_name} 4   horse           0120     0375   00      ${wandb_group_name} &&
 bash scripts/${script_name} 4   bunny           0000     1000   00      ${wandb_group_name} &
 
-bash scripts/${script_name} 5   hour_glass      0100     0200   00      ${wandb_group_name} &&
-bash scripts/${script_name} 5   k1_push_up      0541     0557   01      ${wandb_group_name} &&
-bash scripts/${script_name} 5   penguin         0217     0239   00      ${wandb_group_name} &
+bash scripts/${script_name} 4   hour_glass      0100     0200   00      ${wandb_group_name} &&
+bash scripts/${script_name} 4   k1_push_up      0541     0557   01      ${wandb_group_name} &&
+bash scripts/${script_name} 4   penguin         0217     0239   00      ${wandb_group_name} &
 
 
 wait

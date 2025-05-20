@@ -15,10 +15,10 @@ bash scripts/${script_name} 4   "wolf(Howling)"             10       60     24  
 bash scripts/${script_name} 4   "bear(walk)"                110      140    16      ${wandb_group_name} &&
 bash scripts/${script_name} 4   "cat(run)"                  25       30     32      ${wandb_group_name} &
 
-bash scripts/${script_name} 5   "cat(walk_final)"           10       20     32      ${wandb_group_name} &&
-bash scripts/${script_name} 5   "wolf(Run)"                 20       25     16      ${wandb_group_name} &&
-bash scripts/${script_name} 5   "cat(walkprogressive_noz)"  25       30     32      ${wandb_group_name} &&
-bash scripts/${script_name} 5   "duck(eat_grass)"           5        15     32      ${wandb_group_name} &
+bash scripts/${script_name} 0   "cat(walk_final)"           10       20     32      ${wandb_group_name} &&
+bash scripts/${script_name} 0   "wolf(Run)"                 20       25     16      ${wandb_group_name} &&
+bash scripts/${script_name} 0   "cat(walkprogressive_noz)"  25       30     32      ${wandb_group_name} &&
+bash scripts/${script_name} 0   "duck(eat_grass)"           5        15     32      ${wandb_group_name} &
 
 bash scripts/${script_name} 0   "duck(swim)"                145      160    16      ${wandb_group_name} &&
 bash scripts/${script_name} 0   "whiteTiger(roaringwalk)"   15       25     32      ${wandb_group_name} &&

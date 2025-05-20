@@ -80,7 +80,7 @@ from jhutil import (
     get_img_diff,
     crop_two_image_with_background,
     crop_two_image_with_alpha,
-    save_motion_img,
+    # save_motion_img,
 )
 from gesi.roma import get_drag_roma
 import warnings
@@ -560,7 +560,8 @@ class Runner:
         if cfg.data_name == "DFA":
             self.backgrounds = torch.ones(1, 3, device=self.device)   # white
         else:
-            self.backgrounds = torch.zeros(1, 3, device=self.device)  # black
+            # self.backgrounds = torch.zeros(1, 3, device=self.device)  # black
+            self.backgrounds = torch.ones(1, 3, device=self.device)   # white
 
     def rasterize_splats(
         self,
@@ -1297,8 +1298,18 @@ class Runner:
 
         motion_data = torch.load(f"{self.cfg.result_dir}/motion_data.pt")
 
-        # TODO: class 자체를 Load하기
-        points_init, quats_init, anchor, R_goal, t_goal, group_id_all, bbox, self.camtoworlds_pred = motion_data
+        # TODO: delete
+        try:
+            points_init, quats_init, anchor, R_goal, t_goal, group_id_all, bbox, self.camtoworlds_pred = motion_data
+        except:
+            points_init, quats_init, anchor, R_goal, t_goal, group_id_all, bbox = motion_data
+            breakpoint()
+            trainloader = DataLoader(self.trainset, batch_size=1)
+            trainloader_iter = iter(trainloader)
+            self.data = next(trainloader_iter)
+            self.camtoworlds_pred = self.data["camtoworld"].to(self.device)
+    
+
         self.splats["means"].data.copy_(points_init.detach())
         self.splats["quats"].data.copy_(quats_init.detach())
         
@@ -1306,6 +1317,11 @@ class Runner:
         coef_drag            = self.hpara.coef_drag_3d
         coef_group_arap      = self.hpara.coef_group_arap * 0.01
         coef_arap_drag       = self.hpara.coef_arap_drag * 0.2
+        if self.cfg.data_name == "dfa":
+            coef_arap_drag *= 0.1
+        elif "dog" in self.cfg.result_dir:
+            coef_arap_drag *= 5
+
         lr                   = self.hpara.lr_motion
         anchor_k             = self.hpara.anchor_k
         rbf_gamma            = self.hpara.rbf_gamma
@@ -1370,7 +1386,7 @@ class Runner:
             
             loss = (
                 coef_drag * loss_drag
-                + max(min_rigid_coef, 1 - i / scheduler_step) * coef_group_arap * loss_group_arap
+                # + max(min_rigid_coef, 1 - i / scheduler_step) * coef_group_arap * loss_group_arap
                 + max(min_rigid_coef, 1 - i / scheduler_step) * coef_arap_drag * loss_arap
             )
 
@@ -1387,9 +1403,10 @@ class Runner:
                 image = image_source[:, h_from-5:h_to+5, w_from-10:w_to].squeeze()
             else:
                 # crop
-                w_from, h_from, w_to, h_to = bbox
-                image_source = image_source[:, h_from-5:h_to+5, w_from-10:w_to]
-                image_target = image_target[:, h_from-5:h_to+5, w_from-10:w_to]
+                # w_from, h_from, w_to, h_to = bbox
+                # image_source = image_source[:, h_from-30:h_to+30, w_from-45:w_to+15]
+                # image_target = image_target[:, h_from-30:h_to+30, w_from-45:w_to+15]
+                image_target[..., :3] = image_target[..., :3] + (1 - image_target[..., 3:])
                 # src and tgt
                 image = torch.cat(
                     [image_source.squeeze(), image_target.squeeze()], dim=1
@@ -1802,7 +1819,7 @@ class Runner:
             )  # [1, H, W, 4]
             colors = torch.clamp(renders[..., 0:3], 0.0, 1.0)  # [1, H, W, 3]
             H, W = colors.shape[1:3]
-            colors = colors[:, :, W//4:3*W//4]  # crop by width
+            # colors = colors[:, :, W//4:3*W//4]  # crop by width
 
             canvas = colors.squeeze(0).cpu().numpy()
             canvas = (canvas * 255).astype(np.uint8)
@@ -1886,8 +1903,8 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
                 runner.cfg.max_steps = 500
                 runner.train()
             elif cfg.motion_video:
-                runner.make_motion_video(idx=0, threhold_early_stop=5e-6, scheduler_step=500, min_rigid_coef=0)
-                # runner.make_motion_video(idx=1, threhold_early_stop=1e-5, scheduler_step=800, min_rigid_coef=0)
+                # runner.make_motion_video(idx=0, threhold_early_stop=5e-6, scheduler_step=500, min_rigid_coef=0)
+                runner.make_motion_video(idx=1, threhold_early_stop=1e-3, scheduler_step=800, min_rigid_coef=0)
                 # runner.make_motion_video(idx=2, threhold_early_stop=1e-5, scheduler_step=500, min_rigid_coef=0)
             else:
                 runner.train_drag()
