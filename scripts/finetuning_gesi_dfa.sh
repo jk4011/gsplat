@@ -17,7 +17,7 @@ fi
 
 CUDA_VISIBLE_DEVICES=$GPU python examples/gesi_trainer.py default \
     --data_dir /data2/wlsgur4011/GESI/gsplat/data/DFA_processed/${object_name}/${index_to} \
-    --result_dir ./results/dfa/${object_name}_finetune \
+    --result_dir ./results/dfa_gesi/${object_name}_finetune \
     --ckpt $ckpt \
     --data_factor 1 \
     --data_name DFA \
@@ -29,5 +29,7 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/gesi_trainer.py default \
     --wandb \
     --wandb_group ${version} \
     --disable_viewer \
+    --render_traj_simple \
+    --video_path /data2/wlsgur4011/GESI/output_comparison/dfa_gesi/${object_name}.mp4
 
 

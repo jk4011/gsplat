@@ -2,12 +2,7 @@
 
 #!/bin/bash
 set -e        # exit when error
-set -o xtrace # print command
-
-
-#!/bin/bash
-set -e        # exit when error
-set -o xtrace # print command
+# set -o xtrace # print command
 
 
 if [ "$#" -ne 2 ]; then
@@ -21,13 +16,18 @@ OUTPUT_DIR="$2"
 # 데이터 디렉토리 순회
 for datadir in "$DATA_DIR"/*; do
     # if datadir is not panda continue
-    if [ "$(basename "$datadir")" != "panda" ]; then
+    if [ "$(basename "$datadir")" != "beagle_dog" ]; then
         continue
     fi
+
     if [ -d "$datadir" ]; then
         data_name=$(basename "$datadir")
         # img 폴더 아래의 모든 subfolder (예: s1) 순회
         for subfolder in "$datadir"/img/*; do
+            if [ "$(basename "$subfolder")" != "s1_24fps" ]; then
+                continue
+            fi
+
             if [ -d "$subfolder" ]; then
                 subfolder_name=$(basename "$subfolder")
                 # subfolder 내의 각 frame 폴더 순회

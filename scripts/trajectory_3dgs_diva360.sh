@@ -21,8 +21,8 @@ fi
 
 CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
     --data_dir $data_dir \
-    --result_dir ./results/diva360_finetune/${object_name}_${index_from}_${index_to} \
-    --ckpt ./results/diva360_finetune/${object_name}_${index_from}_${index_to}/ckpt_finetune.pt \
+    --result_dir /data2/wlsgur4011/GESI/output_comparison2/3dgs \
+    --ckpt ./results/diva360_3dgs/${object_name}_${index_from}_${index_to}/ckpt_finetune.pt \
     --data_factor 1 \
     --data_name diva360 \
     --port 8081 \

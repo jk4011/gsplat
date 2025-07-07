@@ -25,5 +25,5 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/human_manipulation.py default \
     --wandb \
     --wandb_group ${version} \
     --cam_idx $cam_idx \
-    # --disable_viewer \
+    --disable_viewer \
 
