@@ -1,7 +1,7 @@
 import wandb
 from easydict import EasyDict
 
-SWEEP_WHOLE_ID = "jh11/GESI_sweep/ovki01qh"
+SWEEP_WHOLE_ID = "jh11/GESI_sweep/kuzw3ao5"
 
 sweep_config = {
     "method": "bayes",  # grid, random, bayes 중 선택
