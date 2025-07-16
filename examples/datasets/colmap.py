@@ -345,6 +345,12 @@ class Dataset:
         else:
             if split == "train":
                 self.indices = indices[indices % self.parser.test_every != 4]
+                # sample n
+                n = 30
+                np.random.seed(42)
+                self.indices = np.random.choice(
+                    self.indices, size=n, replace=False
+                )
             else:
                 self.indices = indices[indices % self.parser.test_every == 4]
 
