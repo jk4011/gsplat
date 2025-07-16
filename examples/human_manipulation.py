@@ -20,6 +20,7 @@ class ManipulationRunner(Runner):
         refine_threhold      = self.hpara.refine_threhold
         voxel_size           = self.hpara.voxel_size
         filter_distance      = 5
+        n_anchor             = self.hpara.n_anchor
         
         self.splats = dict(self.splats)
 
@@ -54,7 +55,7 @@ class ManipulationRunner(Runner):
         from jhutil import color_log; color_log(3333, "initialize anchor and optimizer")
 
         anchor = voxelize_pointcloud_and_get_means(points_3d, voxel_size=voxel_size)
-        # anchor, anchor_indice = torch_fpsample.sample(points_3d.cpu(), n_anchor)
+        assert anchor.shape[0] > n_anchor
         anchor = anchor.to(self.device)
 
         N = anchor.shape[0]

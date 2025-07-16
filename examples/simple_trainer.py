@@ -244,7 +244,7 @@ class Config:
 
     without_group_refine: bool = False
 
-    naive_group: bool = True
+    naive_group: bool = False
     
     motion_video: bool = False
 
@@ -950,7 +950,7 @@ class Runner:
             # eval the full set
             if step in [i - 1 for i in cfg.eval_steps]:
                 self.eval(step)
-                self.render_traj(step)
+                # self.render_traj(step)
 
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
@@ -983,7 +983,7 @@ class Runner:
                         ]}, step=step,
                         commit=True
                     )
-        self.render_traj(step=step, group_id_all=None, video_path=cfg.video_path)
+        # self.render_traj(step=step, group_id_all=None, video_path=cfg.video_path)
 
     def train_drag(
         self,
@@ -1069,6 +1069,7 @@ class Runner:
         from jhutil import color_log; color_log(3333, "initialize anchor and optimizer")
 
         anchor = voxelize_pointcloud_and_get_means(points_3d, voxel_size=voxel_size)
+        
         anchor = anchor.to(self.device)
 
 
@@ -1315,7 +1316,7 @@ class Runner:
         scales = self.splats["scales"]
         Ks = self.data["K"].to(self.device)
         camtoworlds = self.data["camtoworld"].to(self.device)
-        visibility = compute_visibility(self.width, self.height, means3d, quats, opacities, scales, Ks, camtoworlds)
+        visibility, means2d = compute_visibility(self.width, self.height, means3d, quats, opacities, scales, Ks, camtoworlds)
         visible_mask = visibility > self.hpara.vis_threshold
 
         return visible_mask
@@ -1942,7 +1943,13 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             elif cfg.motion_video:
                 runner.make_motion_video(idx=0, threhold_early_stop=5e-6, scheduler_step=500, min_rigid_coef=0)
             else:
+                start_time = time.time()  # 시작 시간 기록
                 runner.train_drag()
+                end_time = time.time()    # 종료 시간 기록
+
+                elapsed_time = end_time - start_time
+                wandb.log({"drag_time": elapsed_time})
+                
                 if cfg.render_traj_simple:
                     if cfg.data_name == "diva360":
                         render_traj_path = "diva360_spiral"
