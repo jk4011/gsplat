@@ -1940,6 +1940,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
             if cfg.finetune_with_only_rgb:
                 runner.cfg.max_steps = 1001
                 runner.train()
+                runner.eval(step=1001)
             elif cfg.motion_video:
                 runner.make_motion_video(idx=0, threhold_early_stop=5e-6, scheduler_step=500, min_rigid_coef=0)
             else:
