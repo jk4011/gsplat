@@ -353,7 +353,8 @@ class Dataset:
 
     def __getitem__(self, item: int) -> Dict[str, Any]:
         index = self.indices[item]
-        rgba = imageio.imread(self.parser.image_paths[index])
+        image_path = self.parser.image_paths[index]
+        rgba = imageio.imread(image_path)
         image, alpha = rgba[..., :3], rgba[..., 3:]
         camera_id = self.parser.camera_ids[index]
         K = self.parser.Ks_dict[camera_id].copy()  # undistorted K

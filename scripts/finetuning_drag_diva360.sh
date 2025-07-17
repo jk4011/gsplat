@@ -34,4 +34,6 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
     --wandb_group ${version} \
     --cam_idx $cam_idx \
     --disable_viewer \
+    --render_traj_simple \
+    --video_path /data2/wlsgur4011/GESI/output_comparison/diva360_ours/${object_name}.mp4
 

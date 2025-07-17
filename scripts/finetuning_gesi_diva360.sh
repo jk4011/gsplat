@@ -22,7 +22,7 @@ fi
 
 CUDA_VISIBLE_DEVICES=$GPU python examples/gesi_trainer.py default \
     --data_dir $data_dir \
-    --result_dir ./results/diva360_finetune/${object_name}_${index_from}_${index_to} \
+    --result_dir ./results/diva360_gesi_deform_only/${object_name}_${index_from}_${index_to} \
     --ckpt ./results/diva360/${object_name}_${index_from}/ckpts/ckpt_best_psnr.pt \
     --data_factor 1 \
     --data_name diva360 \
@@ -34,4 +34,6 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/gesi_trainer.py default \
     --wandb_group ${version} \
     --cam_idx $cam_idx \
     --disable_viewer \
+    --render_traj_simple \
+    --video_path /data2/wlsgur4011/GESI/output_comparison/diva360_gesi_deform_only/${object_name}.mp4
 

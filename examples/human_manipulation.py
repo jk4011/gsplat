@@ -5,6 +5,8 @@ from simple_trainer import Runner
 class ManipulationRunner(Runner):
     def human_manipulation(self, drag_source, drag_target, group_id_all, wo_group_arap=False):
 
+        self.backgrounds = torch.ones(1, 3, device=self.device)   # white
+
         # get haraparameter
         coef_drag            = self.hpara.coef_drag
         coef_arap_drag       = self.hpara.coef_arap_drag
@@ -18,11 +20,12 @@ class ManipulationRunner(Runner):
         refine_threhold      = self.hpara.refine_threhold
         voxel_size           = self.hpara.voxel_size
         filter_distance      = 5
+        n_anchor             = self.hpara.n_anchor
         
         self.splats = dict(self.splats)
 
         with torch.no_grad():
-            image_source, _ = self.fetch_comparable_two_image(return_rgba=True)
+            image_source, _ = self.fetch_comparable_two_image(return_rgba=True, use_gt_pose=True)
             self.height = image_source.shape[1]
             self.width = image_source.shape[2]
         ##########################################################
@@ -34,7 +37,7 @@ class ManipulationRunner(Runner):
 
         # set drag
         with torch.no_grad():
-            points_2d, _ = self.project_to_2d(points_3d)
+            points_2d, _ = self.project_to_2d(points_3d, use_gt_pose=True)
 
         vis_mask = self.get_visibility_mask()
 
@@ -52,7 +55,7 @@ class ManipulationRunner(Runner):
         from jhutil import color_log; color_log(3333, "initialize anchor and optimizer")
 
         anchor = voxelize_pointcloud_and_get_means(points_3d, voxel_size=voxel_size)
-        # anchor, anchor_indice = torch_fpsample.sample(points_3d.cpu(), n_anchor)
+        assert anchor.shape[0] > n_anchor
         anchor = anchor.to(self.device)
 
         N = anchor.shape[0]
@@ -66,8 +69,8 @@ class ManipulationRunner(Runner):
         # anchor_optimizer = torch.optim.SGD(
         anchor_optimizer = torch.optim.Adam(
             [
-                {"params": quats, "lr": lr_q},
-                {"params": t, "lr": lr_t},
+                {"params": quats, "lr": lr_q * 0.3},
+                {"params": t, "lr": lr_t * 0.3},
             ]
         )
 
@@ -81,8 +84,8 @@ class ManipulationRunner(Runner):
         with torch.no_grad():
             distances, indices_knn = knn_jh(anchor, anchor, k=anchor_k)
             weight = rbf_weight(distances, gamma=rbf_gamma)
-
-        for i in tqdm(range(200)):
+        video = []
+        for i in tqdm(range(100)):
             R = quaternion_to_matrix(F.normalize(quats, dim=-1)).squeeze()  # (N, 3, 3)
             anchor_translated = anchor + t  # (N, 3)
 
@@ -101,7 +104,7 @@ class ManipulationRunner(Runner):
                 )
 
             points_lbs_filtered = points_lbs[points_mask]
-            points_lbs_filtered_2d, _ = self.project_to_2d(points_lbs_filtered)
+            points_lbs_filtered_2d, _ = self.project_to_2d(points_lbs_filtered, use_gt_pose=True)
             loss_drag = drag_loss(points_lbs_filtered_2d, drag_target_filtered)
 
             self.splats["means"] = points_lbs
@@ -117,9 +120,19 @@ class ManipulationRunner(Runner):
             anchor_optimizer.step()
             anchor_optimizer.zero_grad()
         
-        with torch.no_grad():
-            img, _ = self.fetch_comparable_two_image(return_rgba=True)
-        return img[0].permute(2, 0, 1)
+            with torch.no_grad():
+                img, _ = self.fetch_comparable_two_image(return_rgba=True, use_gt_pose=True)
+            video.append(img[0].permute(2, 0, 1).cpu())
+        
+        from jhutil import save_video
+        object_name = cfg.object_name.split("_[")[0]
+        if wo_group_arap:
+            output_path = f"/data2/wlsgur4011/GESI/output_manipulation/{object_name}_naive.mp4"
+        else:
+            output_path = f"/data2/wlsgur4011/GESI/output_manipulation/{object_name}_ours.mp4"
+
+        save_video(video, output_path)
+        return video[-1]
 
 
 def main(local_rank: int, world_rank, world_size: int, cfg: Config):
@@ -146,6 +159,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
                 runner.splats[k].data = torch.cat([ckpt["splats"][k] for ckpt in ckpts])
         
         [drag_source, drag_target] = torch.load(f"/tmp/.cache/human_manipulation_{cfg.object_name}.pt")
+        drag_target = (drag_target * 2 + drag_source) / 3
 
         group_id_all = torch.load(f"{cfg.result_dir}/ckpt_finetune.pt")["group_id_all_init"]
 

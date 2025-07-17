@@ -105,8 +105,12 @@ class Config:
     compression: Optional[Literal["png"]] = None
 
     render_traj_all: bool = False
+
+    render_traj_simple: bool = False
+
+    video_path: str = None
     # Render trajectory path
-    render_traj_path: str = "ellipse"  # "interp", "ellipse", "spiral"
+    render_traj_path: str = "diva360_spiral"  # "interp", "ellipse", "spiral"
 
     # Path to the Mip-NeRF 360 dataset
     data_dir: str = "data/360_v2/garden"
@@ -747,6 +751,10 @@ class Runner:
                 bkgd = torch.rand(1, 3, device=device)
                 colors = colors + bkgd * (1.0 - alphas)
                 pixels = pixels + bkgd * (1.0 - alphas_gt)
+            
+            # bkgd = torch.ones(1, 3, device=device)
+            # colors = colors + bkgd * (1.0 - alphas)
+            # pixels = pixels + bkgd * (1.0 - alphas_gt)
 
             self.cfg.strategy.step_pre_backward(
                 params=self.splats,
@@ -943,7 +951,7 @@ class Runner:
             # eval the full set
             if step in [i - 1 for i in cfg.eval_steps]:
                 self.eval(step)
-                self.render_traj(step)
+                # self.render_traj(step)
 
             # run compression
             if cfg.compression is not None and step in [i - 1 for i in cfg.eval_steps]:
@@ -961,9 +969,9 @@ class Runner:
                 self.viewer.update(step, num_train_rays_per_step)
             
             if wandb.run and not cfg.wandb_sweep:
-                if step % 100 == 99:
+                if step % 100 == 0:
                     image_source, image_target = self.fetch_comparable_two_image(
-                        return_rgba=True, return_shape="chw"
+                        return_rgba=True, return_shape="chw", use_gt_pose=True
                     )
                     _, img1, img2 = crop_two_image_with_alpha(
                         image_source, image_target
@@ -974,7 +982,9 @@ class Runner:
                         {"train_diff": [
                             wandb.Image(diff_img, caption="train_diff"),
                         ]}, step=step,
+                        commit=True
                     )
+        # self.render_traj(step=step, group_id_all=None, video_path=cfg.video_path)
 
     def train_drag(
         self,
@@ -1054,13 +1064,13 @@ class Runner:
         points_3d_filtered = points_3d[points_mask]
         drag_target_filtered = drag_target[drag_indice]
         drag_source_filtered = drag_source[drag_indice]
-
         ##########################################################
         ########### 3. initialize anchor and optimizer ###########
         ##########################################################
         from jhutil import color_log; color_log(3333, "initialize anchor and optimizer")
 
         anchor = voxelize_pointcloud_and_get_means(points_3d, voxel_size=voxel_size)
+        
         anchor = anchor.to(self.device)
 
 
@@ -1131,21 +1141,24 @@ class Runner:
                 bbox=bbox,
                 skip_line=True,
             )
+            for i in range(0, 5):
+                group_id_all_tmp = torch.where(
+                    group_id_all == i, group_id_all, -1
+                )
+                sh0_origin = self.update_sh_with_group_id(group_id_all_tmp)
+                with torch.no_grad():
+                    group_image, _ = self.fetch_comparable_two_image(return_rgba=True)
 
-            sh0_origin = self.update_sh_with_group_id(group_id_all)
-            with torch.no_grad():
-                group_image, _ = self.fetch_comparable_two_image(return_rgba=True)
-
-            group_image = rearrange(group_image[0], "h w c -> c h w")
-            group_image = show_matching(img1, group_image, bbox=bbox, skip_line=True)
-            self.splats["sh0"] = sh0_origin
-            
-            images = [
-                wandb.Image(origin_image, caption="origin_image"),
-                wandb.Image(matching_image, caption="matching_image"),
-            ]
-            wandb.log({"matching": images})
-            wandb.log({"group_image": [wandb.Image(group_image, caption="initial_group")]})
+                group_image = rearrange(group_image[0], "h w c -> c h w")
+                group_image = show_matching(img1, group_image, bbox=bbox, skip_line=True)
+                self.splats["sh0"] = sh0_origin
+                
+                images = [
+                    wandb.Image(origin_image, caption="origin_image"),
+                    wandb.Image(matching_image, caption="matching_image"),
+                ]
+                wandb.log({"matching": images})
+                wandb.log({"group_image": [wandb.Image(group_image, caption="initial_group")]})
         
 
         ##########################################################
@@ -1231,14 +1244,8 @@ class Runner:
 
 
         sh0_origin = self.update_sh_with_group_id(group_id_all)
-        with torch.no_grad():
-            group_image, image_target = self.fetch_comparable_two_image(return_rgba=True)
-
-        im1 = rearrange(image_target[0], "h w c -> c h w")
-        im2 = rearrange(group_image[0], "h w c -> c h w")
-        image_final_group = show_matching(im1, im2, bbox=bbox, skip_line=True)
-        wandb.log({"group_image": [wandb.Image(image_final_group, caption="final_group")]})
-
+        self.log_final_group(points_init, quats_init, bbox)
+        
         self.splats["sh0"] = sh0_origin
 
         # data for motion
@@ -1279,6 +1286,29 @@ class Runner:
         torch.save(data_all, f"/tmp/.cache/data_all_{self.cfg.object_name}.pt")
 
 
+    def log_final_group(self, points_init, quats_init, bbox):
+        with torch.no_grad():
+            group_image, image_target = self.fetch_comparable_two_image(return_rgba=True)
+
+        im1 = rearrange(image_target[0], "h w c -> c h w")
+        im2 = rearrange(group_image[0], "h w c -> c h w")
+
+        image_final_group = show_matching(im1, im2, bbox=bbox, skip_line=True)
+        wandb.log({"group_image": [wandb.Image(image_final_group, caption="final_group")]})
+        
+        points_final = self.splats["means"].clone().detach()
+        quats_final = self.splats["quats"].clone().detach()
+
+        with torch.no_grad():
+            self.splats["means"] = points_init
+            self.splats["quats"] = quats_init
+            group_image, image_target = self.fetch_comparable_two_image(return_rgba=True)
+            self.splats["means"] = points_final
+            self.splats["quats"] = quats_final
+            im2 = rearrange(group_image[0], "h w c -> c h w")
+        wandb.log({"group_image": [wandb.Image(im2, caption="final_group_2")]})
+
+
     def get_visibility_mask(self):
 
         means3d = self.splats["means"]
@@ -1287,8 +1317,7 @@ class Runner:
         scales = self.splats["scales"]
         Ks = self.data["K"].to(self.device)
         camtoworlds = self.data["camtoworld"].to(self.device)
-
-        visibility = compute_visibility(self.width, self.height, means3d, quats, opacities, scales, Ks, camtoworlds)
+        visibility, means2d = compute_visibility(self.width, self.height, means3d, quats, opacities, scales, Ks, camtoworlds)
         visible_mask = visibility > self.hpara.vis_threshold
 
         return visible_mask
@@ -1442,7 +1471,7 @@ class Runner:
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         save_video(image_list[::stride], output_path, fps=30)
 
-    def project_to_2d(self, points):
+    def project_to_2d(self, points, use_gt_pose=False):
         if not hasattr(self, "data"):
             trainloader = DataLoader(self.trainset, batch_size=1)
             trainloader_iter = iter(trainloader)
@@ -1450,8 +1479,14 @@ class Runner:
         data = self.data
         device = self.device
         # camtoworlds = data["camtoworld"].to(device)  # [1, 4, 4]
+
+        if use_gt_pose:
+            camtoworlds = data["camtoworld"].to(device)
+        else:
+            camtoworlds = self.camtoworlds_pred
+        
         Ks = data["K"].to(device)  # [1, 3, 3]
-        means2d, depth = project_pointcloud_to_2d(points, self.camtoworlds_pred, Ks)
+        means2d, depth = project_pointcloud_to_2d(points, camtoworlds, Ks)
         return means2d, depth
 
     def fectch_query_image(self):
@@ -1536,9 +1571,8 @@ class Runner:
 
         return target_images
 
-
     
-    def fetch_comparable_two_image(self, return_rgba=False, return_shape="bhwc"):
+    def fetch_comparable_two_image(self, return_rgba=False, return_shape="bhwc", use_gt_pose=False):
         if not hasattr(self, "data"):
             trainloader = DataLoader(self.trainset, batch_size=1)
             trainloader_iter = iter(trainloader)
@@ -1554,8 +1588,13 @@ class Runner:
         masks = data["mask"].to(device) if "mask" in data else None  # [1, H, W]
         height, width = gt_images.shape[1:3]
 
+        if use_gt_pose:
+            camtoworlds = data["camtoworld"].to(device)
+        else:
+            camtoworlds = self.camtoworlds_pred
+        
         renders, alphas, info = self.rasterize_splats(
-            camtoworlds=self.camtoworlds_pred,
+            camtoworlds=camtoworlds,
             Ks=Ks,
             width=width,
             height=height,
@@ -1716,10 +1755,11 @@ class Runner:
             splats = cluster_largest(splats, eps=eps)
             ckpt = {"step": step, "splats": splats, "clustered": True}
             torch.save(ckpt, f"{self.ckpt_dir}/ckpt_best_psnr.pt")
+            print("Save best checkpoint to ", f"{self.ckpt_dir}/ckpt_best_psnr.pt")
             
         torch.cuda.empty_cache()
         
-    def update_sh_with_group_id(self, group_id_all):
+    def update_sh_with_group_id(self, group_id_all, only_idx=-1):
         from gesi.torch_splat import rgb_to_sh
         from jhutil import PALATTE
 
@@ -1729,9 +1769,19 @@ class Runner:
             group_id = group_id_all == i
             if group_id.sum() == 0:
                 continue
-            rgb = torch.tensor(PALATTE[i], device=self.device).float() / 255.0
+
+            if only_idx != -1:
+                color_idx = 0  # red
+            else:
+                color_idx = i
+
+            rgb = torch.tensor(PALATTE[color_idx], device=self.device).float() / 255.0
             rgb = rgb.unsqueeze(0).repeat(group_id.sum(), 1)
             sh0[group_id] = rgb_to_sh(rgb)
+
+        if only_idx != -1:
+            with torch.no_grad():
+                self.splats["opacities"][group_id_all != only_idx] = - 100
 
         sh0_origin = self.splats["sh0"].clone().detach()
         self.splats["sh0"] = sh0
@@ -1741,6 +1791,9 @@ class Runner:
 
     @torch.no_grad()
     def render_traj(self, step, group_id_all=None, video_path="/data2/wlsgur4011/GESI/output_video_traj/output.mp4"):
+
+        self.backgrounds = torch.ones(1, 3, device=self.device)   # white
+        
         """Entry for trajectory rendering."""
         print("Running trajectory rendering...")
         cfg = self.cfg
@@ -1766,14 +1819,16 @@ class Runner:
                 spiral_scale_r=self.parser.extconf["spiral_radius_scale"],
             )
         elif cfg.render_traj_path == "diva360_circle":
-            json_path = f"/data2/wlsgur4011/GESI/gsplat/data/Diva360_data/processed_data/{cfg.object_name}/transforms_circle.json"
+            object_name = cfg.object_name.split("_[")[0]
+            json_path = f"/data2/wlsgur4011/GESI/gsplat/data/Diva360_data/processed_data/{object_name}/transforms_circle.json"
             camtoworlds_all = json_to_cam2world(json_path, self.parser.transform)
             camtoworlds_all = generate_interpolated_path(
                 camtoworlds_all, 1
             )  # [N, 3, 4]
 
         elif cfg.render_traj_path == "diva360_spiral":
-            json_path = f"/data2/wlsgur4011/GESI/gsplat/data/Diva360_data/processed_data/{cfg.object_name}/transforms_spiral_hr.json"
+            object_name = cfg.object_name.split("_[")[0]
+            json_path = f"/data2/wlsgur4011/GESI/gsplat/data/Diva360_data/processed_data/{object_name}/transforms_spiral_hr.json"
             camtoworlds_all = json_to_cam2world(json_path, self.parser.transform)
             camtoworlds_all = generate_interpolated_path(
                 camtoworlds_all, 1
@@ -1900,48 +1955,68 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         if cfg.single_finetune:
 
             if cfg.finetune_with_only_rgb:
-                runner.cfg.max_steps = 500
+                runner.cfg.max_steps = 1001
                 runner.train()
+                runner.eval(step=1001)
             elif cfg.motion_video:
-                # runner.make_motion_video(idx=0, threhold_early_stop=5e-6, scheduler_step=500, min_rigid_coef=0)
-                runner.make_motion_video(idx=1, threhold_early_stop=1e-3, scheduler_step=800, min_rigid_coef=0)
-                # runner.make_motion_video(idx=2, threhold_early_stop=1e-5, scheduler_step=500, min_rigid_coef=0)
+                runner.make_motion_video(idx=0, threhold_early_stop=5e-6, scheduler_step=500, min_rigid_coef=0)
             else:
+                start_time = time.time()  # 시작 시간 기록
                 runner.train_drag()
+                end_time = time.time()    # 종료 시간 기록
+
+                elapsed_time = end_time - start_time
+                wandb.log({"drag_time": elapsed_time})
+                
+                if cfg.render_traj_simple:
+                    if cfg.data_name == "diva360":
+                        render_traj_path = "diva360_spiral"
+                    elif cfg.data_name == "DFA":
+                        render_traj_path = "interp"
+                    runner.cfg.render_traj_path = render_traj_path
+                    runner.render_traj(step=step, group_id_all=None, video_path=cfg.video_path)
         
 
         if cfg.render_traj_all:
             if cfg.data_name == "diva360":
                 traj_path_list = ["diva360_spiral"]  # "interp", "ellipse", "spiral"
             elif cfg.data_name == "DFA":
-                traj_path_list = ["interp"] # "interp", "ellipse", "spiral"
+                traj_path_list = ["interp"]  # "interp", "ellipse", "spiral"
             for render_traj_path in traj_path_list:
                 runner.cfg.render_traj_path = render_traj_path
 
-                video_dir = f"/data2/wlsgur4011/GESI/output_video_traj/{cfg.data_name}"
+                # video_dir = f"/data2/wlsgur4011/GESI/output_video_traj/{cfg.data_name}"
+                video_dir = cfg.result_dir
                 os.makedirs(video_dir, exist_ok=True)
                 video_paths = [
                     f"{video_dir}/traj_{cfg.object_name}_{cfg.render_traj_path}.mp4",
                     f"{video_dir}/traj_{cfg.object_name}_{cfg.render_traj_path}_init.mp4",
                     f"{video_dir}/traj_{cfg.object_name}_{cfg.render_traj_path}_final.mp4"
                 ]
-                group_ids = [
-                    None,
-                    ckpts[0]["group_id_all_init"],
-                    ckpts[0]["group_id_all"],
-                ]
-                for i in range(3):
-                    group_id_all = group_ids[i]
-                    video_path = video_paths[i]
-                    runner.render_traj(step=step, group_id_all=group_id_all, video_path=video_path)
-                    runner.cfg.sh_degree = 0
-            
-                # concat three video by width 
-                video_path = f"{video_dir}/traj_{cfg.object_name}_{cfg.render_traj_path}_concat.mp4"
-                os.system(f'ffmpeg -y -i "{video_paths[0]}" -i "{video_paths[1]}" -i "{video_paths[2]}" -filter_complex hstack=inputs=3 "{video_path}"')
+                try:
+                    group_ids = [
+                        None,
+                        ckpts[0]["group_id_all_init"],
+                        ckpts[0]["group_id_all"],
+                    ]
+                    for i in range(3):
+                        group_id_all = group_ids[i]
+                        video_path = video_paths[i]
+                        runner.render_traj(step=step, group_id_all=group_id_all, video_path=video_path)
+                        runner.cfg.sh_degree = 0
                 
-                for video_path in video_paths:
-                    os.remove(video_path)
+                    # concat three video by width 
+                    video_path = f"{video_dir}/traj_{cfg.object_name}_{cfg.render_traj_path}_concat.mp4"
+                    os.system(f'ffmpeg -y -i "{video_paths[0]}" -i "{video_paths[1]}" -i "{video_paths[2]}" -filter_complex hstack=inputs=3 "{video_path}"')
+                    
+                    for video_path in video_paths:
+                        os.remove(video_path)
+                except:
+                    # group_id_all = group_ids[i]
+                    # video_path = video_paths[i]
+                    video_path = f"{video_dir}/traj_{cfg.object_name}.mp4"
+                    runner.render_traj(step=step, group_id_all=None, video_path=video_path)
+
 
     else:
         runner.train()

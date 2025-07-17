@@ -52,7 +52,8 @@ def inverse_sigmoid(y, eps=1e-6):
     return torch.log(y / (1 - y)).item()
 
 
-class DrotRunner(Runner):    
+class GesiRunner(Runner):
+
     def train_drag(self) -> None:
 
         # get haraparameter
@@ -68,7 +69,7 @@ class DrotRunner(Runner):
         coef_arap_dist       = 1e5
         coef_fine_reg        = 1e4
         min_thresh           = 0.1
-        deform_only          = False
+        deform_only = True
         if deform_only:
             lr_rest = 0
         else:
@@ -162,7 +163,7 @@ class DrotRunner(Runner):
                 self.splats["quats"].data.copy_(quats_updated)
 
                 with torch.no_grad():
-                    image_from, image_to = self.fetch_comparable_two_image()
+                    image_from, image_to = self.fetch_comparable_two_image(use_gt_pose=True)
 
                 loss_drot = self.drot_loss_reparameter(image_from, image_to, points_updated, quats_updated)
 
@@ -206,12 +207,12 @@ class DrotRunner(Runner):
             
                 if cur_step % 100 == 0:
                     image_source, image_target = self.fetch_comparable_two_image(
-                        return_rgba=True, return_shape="chw"
+                        return_rgba=True, return_shape="chw", use_gt_pose=True
                     )
                     _, img1, img2 = crop_two_image_with_alpha(
                         image_source, image_target
                     )
-                    diff_img = get_img_diff(img1[:3], img2[:3])
+                    diff_img = get_img_diff(img1, img2)
                     wandb.log({"train_img_diff": wandb.Image(diff_img, caption="train_img_diff"),}, step=cur_step)
                 
                 cur_step += 1
@@ -219,13 +220,23 @@ class DrotRunner(Runner):
             if not self.cfg.skip_eval:
                 self.eval(step=cur_step)
 
+        data = {"step": step, "splats": (torch.nn.ParameterDict(self.splats).state_dict())}
+        torch.save(data, f"{self.cfg.result_dir}/ckpt_finetune.pt")
+
 
     def render_and_calc_rgb_loss(self):
-        renders, gt_images = self.fetch_comparable_two_image()
-        if renders.shape[-1] == 4:
-            colors, depths = renders[..., 0:3], renders[..., 3:4]
-        else:
-            colors, depths = renders, None
+        renders, gt_images = self.fetch_comparable_two_image(use_gt_pose=True, return_rgba=True)
+        colors, alphas = renders[..., 0:3], renders[..., 3:4]
+        gt_images, gt_alphas = gt_images[..., 0:3], gt_images[..., 3:4]
+        
+        # if the background is black, the black color spreads to whole image
+        
+        bkgd = torch.ones(1, 3, device=self.device)
+        colors = colors + bkgd * (1.0 - alphas)
+        colors = colors + bkgd * (1.0 - gt_alphas)
+
+        colors = colors * alphas + gt_images * (1 - alphas)
+        colors = colors * alphas + gt_images * (1 - alphas)
 
         l1loss = F.l1_loss(colors, gt_images)
         ssimloss = 1.0 - fused_ssim(
@@ -274,7 +285,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
         if world_rank == 0:
             print("Viewer is disabled in distributed training.")
 
-    runner = DrotRunner(local_rank, world_rank, world_size, cfg)
+    runner = GesiRunner(local_rank, world_rank, world_size, cfg)
 
     if cfg.ckpt is not None:
         # run eval only
@@ -299,6 +310,13 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
                 runner.make_motion_video(idx=2, threhold_early_stop=1e-5, scheduler_step=500, min_rigid_coef=0)
             else:
                 runner.train_drag()
+                if cfg.render_traj_simple:
+                    if cfg.data_name == "diva360":
+                        render_traj_path = "diva360_spiral"
+                    elif cfg.data_name == "DFA":
+                        render_traj_path = "interp"
+                    runner.cfg.render_traj_path = render_traj_path
+                    runner.render_traj(step=step, group_id_all=None, video_path=cfg.video_path)
 
         if cfg.render_traj_all:
             if cfg.data_name == "diva360":
@@ -327,6 +345,7 @@ def main(local_rank: int, world_rank, world_size: int, cfg: Config):
 
     else:
         runner.train()
+        runner.render_traj(step=step, group_id_all=None, video_path=cfg.video_path)
 
     if not cfg.disable_viewer:
         print("Viewer running... Ctrl+C to exit.")

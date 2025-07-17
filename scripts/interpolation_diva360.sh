@@ -85,7 +85,7 @@ done
 idx_from=${idx_list[0]}
 idx_to=${idx_list[1]}
 for idx_to in ${idx_list[@]:1}; do
-    video_path=/data2/wlsgur4011/GESI/output_video/diva360_simple/${object_name}_${idx_start}_${idx_from}_${idx_to}_0.mp4
+    video_path=/data2/wlsgur4011/GESI/output_video/diva360_interpolation/${object_name}_${idx_start}_${idx_from}_${idx_to}_0.mp4
     video_paths="$video_paths ${video_path}"
     idx_from=$idx_to
 done

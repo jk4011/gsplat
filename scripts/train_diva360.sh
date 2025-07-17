@@ -17,11 +17,11 @@ fi
 
 CUDA_VISIBLE_DEVICES=$GPU python examples/simple_trainer.py default \
     --data_dir $data_dir \
-    --result_dir ./results/diva360/tmp \
+    --result_dir ./results/diva360/${object_name}_${frame_index} \
     --data_factor 1 \
     --data_name diva360 \
     --port 8081 \
     --scale_reg 0.1 \
-    # --random_bkgd \
-    # --disable_viewer \
+    --random_bkgd \
+    --disable_viewer \
     
