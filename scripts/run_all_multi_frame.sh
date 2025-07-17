@@ -14,44 +14,44 @@ set -o xtrace # print command
 script_name=$1
 wandb_group_name=$2
 
-# bash scripts/${script_name} 0   dog             0177     0327   00      ${wandb_group_name} &
-# bash scripts/${script_name} 1   dog             0177     0057   00      ${wandb_group_name} &
-# bash scripts/${script_name} 2   dog             0177     0012   00      ${wandb_group_name} &
-# bash scripts/${script_name} 3   dog             0177     0379   00      ${wandb_group_name} &
-# bash scripts/${script_name} 4   dog             0177     0140   00      ${wandb_group_name} &
+bash scripts/${script_name} 0   dog             0177     0327   00      ${wandb_group_name} &
+bash scripts/${script_name} 1   dog             0177     0057   00      ${wandb_group_name} &
+bash scripts/${script_name} 2   dog             0177     0012   00      ${wandb_group_name} &
+bash scripts/${script_name} 3   dog             0177     0379   00      ${wandb_group_name} &
+bash scripts/${script_name} 4   dog             0177     0140   00      ${wandb_group_name} &
 
 wait
-# bash scripts/${script_name} 0   penguin         0217     0654   00      ${wandb_group_name} &
-# bash scripts/${script_name} 1   penguin         0217     0114   00      ${wandb_group_name} &
-# bash scripts/${script_name} 2   penguin         0217     0025   00      ${wandb_group_name} &
-# bash scripts/${script_name} 3   penguin         0217     0281   00      ${wandb_group_name} &
-# bash scripts/${script_name} 4   penguin         0217     0250   00      ${wandb_group_name} &
-
-
-wait
-
-# bash scripts/${script_name} 0   wall_e          0222     0327   00      ${wandb_group_name} &
-# bash scripts/${script_name} 1   wall_e          0222     0057   00      ${wandb_group_name} &
-# bash scripts/${script_name} 2   wall_e          0222     0012   00      ${wandb_group_name} &
-# bash scripts/${script_name} 3   wall_e          0222     0379   00      ${wandb_group_name} &
-# bash scripts/${script_name} 4   wall_e          0222     0140   00      ${wandb_group_name} &
+bash scripts/${script_name} 0   penguin         0217     0654   00      ${wandb_group_name} &
+bash scripts/${script_name} 1   penguin         0217     0114   00      ${wandb_group_name} &
+bash scripts/${script_name} 2   penguin         0217     0025   00      ${wandb_group_name} &
+bash scripts/${script_name} 3   penguin         0217     0281   00      ${wandb_group_name} &
+bash scripts/${script_name} 4   penguin         0217     0250   00      ${wandb_group_name} &
 
 
 wait
 
-# bash scripts/${script_name} 0   wolf            0357     2619   00      ${wandb_group_name} &
-# bash scripts/${script_name} 1   wolf            0357     0456   00      ${wandb_group_name} &
-# bash scripts/${script_name} 2   wolf            0357     0102   00      ${wandb_group_name} &
-# bash scripts/${script_name} 3   wolf            0357     3037   00      ${wandb_group_name} &
-# bash scripts/${script_name} 4   wolf            0357     1126   00      ${wandb_group_name} &
+bash scripts/${script_name} 0   wall_e          0222     0327   00      ${wandb_group_name} &
+bash scripts/${script_name} 1   wall_e          0222     0057   00      ${wandb_group_name} &
+bash scripts/${script_name} 2   wall_e          0222     0012   00      ${wandb_group_name} &
+bash scripts/${script_name} 3   wall_e          0222     0379   00      ${wandb_group_name} &
+bash scripts/${script_name} 4   wall_e          0222     0140   00      ${wandb_group_name} &
+
 
 wait
 
-# bash scripts/${script_name} 0   k1_hand_stand   0412     0654   00      ${wandb_group_name} &
-# bash scripts/${script_name} 1   k1_hand_stand   0412     0114   00      ${wandb_group_name} &
-# bash scripts/${script_name} 2   k1_hand_stand   0412     0025   00      ${wandb_group_name} &
-# bash scripts/${script_name} 3   k1_hand_stand   0412     0759   00      ${wandb_group_name} &
-# bash scripts/${script_name} 4   k1_hand_stand   0412     0281   00      ${wandb_group_name} &
+bash scripts/${script_name} 0   wolf            0357     2619   00      ${wandb_group_name} &
+bash scripts/${script_name} 1   wolf            0357     0456   00      ${wandb_group_name} &
+bash scripts/${script_name} 2   wolf            0357     0102   00      ${wandb_group_name} &
+bash scripts/${script_name} 3   wolf            0357     3037   00      ${wandb_group_name} &
+bash scripts/${script_name} 4   wolf            0357     1126   00      ${wandb_group_name} &
+
+wait
+
+bash scripts/${script_name} 0   k1_hand_stand   0412     0654   00      ${wandb_group_name} &
+bash scripts/${script_name} 1   k1_hand_stand   0412     0114   00      ${wandb_group_name} &
+bash scripts/${script_name} 2   k1_hand_stand   0412     0025   00      ${wandb_group_name} &
+bash scripts/${script_name} 3   k1_hand_stand   0412     0759   00      ${wandb_group_name} &
+bash scripts/${script_name} 4   k1_hand_stand   0412     0281   00      ${wandb_group_name} &
 
 wait
 

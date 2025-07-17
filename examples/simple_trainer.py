@@ -564,8 +564,7 @@ class Runner:
         if cfg.data_name == "DFA":
             self.backgrounds = torch.ones(1, 3, device=self.device)   # white
         else:
-            # self.backgrounds = torch.zeros(1, 3, device=self.device)  # black
-            self.backgrounds = torch.ones(1, 3, device=self.device)   # white
+            self.backgrounds = torch.zeros(1, 3, device=self.device)  # black
 
     def rasterize_splats(
         self,
@@ -1540,7 +1539,14 @@ class Runner:
             img2 = rearrange(image_target[0], "h w c -> c h w")
 
             assert img1.shape == img2.shape, f"img1: {img1.shape}, img2: {img2.shape}"
-            drag_from, drag_to, bbox = get_drag_roma(img1, img2, cycle_threshold=self.hpara.cycle_threshold, device=device)
+            try:
+                drag_from, drag_to, bbox = get_drag_roma(img1, img2, cycle_threshold=self.hpara.cycle_threshold, device=device)
+            except:
+                try:
+                    drag_from, drag_to, bbox = get_drag_roma(img1, img2, cycle_threshold=self.hpara.cycle_threshold, device=device)
+                except:
+                    continue
+                    
             n_covered_patch = count_covered_patches(drag_to, patch_size=20)
             if n_covered_patch > max_covered_path:
                 max_covered_path = n_covered_patch
